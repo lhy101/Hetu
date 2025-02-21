@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from typing import List
 
@@ -9,10 +10,12 @@ class Bucket:
         self._alignment = alignment
         self._batch = []
         self._cu_seqlens_list = []
-        self._packed_batch = None
-        self._packed_cu_seqlens_list = None
         self._padded_batch = None
         self._padded_cu_seqlens_list = None
+        self._packed_batch = None
+        self._packed_cu_seqlens_list = None
+        self._cp_packed_batch = None
+        self._cp_packed_cu_seqlens_list = None
 
     def add_data(self, padded_sequence, valid_tokens):
         self._batch.append(padded_sequence[:valid_tokens])
@@ -33,7 +36,7 @@ class Bucket:
         self._padded_cu_seqlens_list = padded_cu_seqlens_list
 
     # 已经默认batch中的数据按照从短到长排序
-    def pack_data(self, batching_option_matrix, static_shape: bool, sorted=True):
+    def pack_data(self, batching_option_matrix=None, static_shape=False, sorted=True):
         packed_batch = []
         packed_cu_seqlens_list = []
         # 负载均衡的packing策略
@@ -97,6 +100,54 @@ class Bucket:
             packed_cu_seqlens_list = [packed_cu_seqlens_list[i] for i in sorted_indices]
         self._packed_batch = packed_batch
         self._packed_cu_seqlens_list = packed_cu_seqlens_list
+    
+    def generate_cp_pad_data(self):
+        raise NotImplementedError
+    
+    def generate_cp_pack_data(self, cp_size, cp_lens_rate=None):
+        assert self._packed_cu_seqlens_list != None, "please ensure you have packed the bucket"
+        assert self._cp_packed_cu_seqlens_list == None, "generate_cp_pack_data() can only call once"
+        # 目前只写了SYM情形下的packing
+        split_pattern = os.environ.get('HETU_PARALLEL_ATTN_SPLIT_PATTERN')
+        assert split_pattern == "SYM", f"Unsupported HETU_PARALLEL_ATTN_SPLIT_PATTERN value: {split_pattern}. Only 'SYM' is supported when using CP + packing."
+        if cp_lens_rate == None:
+            cp_lens_rate = [1 / cp_size] * cp_size
+        else:
+            assert len(cp_lens_rate) == cp_size and sum(cp_lens_rate) == 1, f"{cp_lens_rate} is invalid"
+        # cp_packed_batch是一个每个cp_rank到其各自的多个micro_batch（即packed sequence）的映射
+        # cp_packed_cu_seqlens_list则是多个micro_batch的cu_seqlens
+        # 注意这里增加cp后cu_seqlens的shape从原先的[packing_num,]变成[cp, packing_num]
+        # 每个cp_rank上是各自local qkv的[packing_num,]的cu_seqlens
+        # 这么设计是为了让C++端的parallel attn算子比较方便实现   
+        self._cp_packed_batch = {cp_idx: [] for cp_idx in range(cp_size)}
+        self._cp_packed_cu_seqlens_list = [] 
+        for packed_seq_idx in range(len(self._packed_cu_seqlens_list)):
+            packed_seq = self._packed_batch[packed_seq_idx]
+            packed_cu_seqlens = self._packed_cu_seqlens_list[packed_seq_idx]
+            cp_packed_cu_seqlens = np.zeros((cp_size, len(packed_cu_seqlens)), dtype=packed_cu_seqlens.dtype)
+            cp_packed_seq = [[] for _ in range(cp_size)] # 每个cp_idx都要存一个 
+            for original_seq_idx in range(len(packed_cu_seqlens) - 1):
+                original_seq = packed_seq[packed_cu_seqlens[original_seq_idx]: packed_cu_seqlens[original_seq_idx + 1]]
+                original_seqlen = len(original_seq)
+                begin_idx = 0
+                end_idx = original_seqlen
+                for cp_idx in range(cp_size):
+                    # TODO: 考虑没法整除的情形
+                    cp_seqlen = int(original_seqlen * cp_lens_rate[cp_idx])
+                    cp_packed_cu_seqlens[cp_idx, original_seq_idx + 1] = cp_packed_cu_seqlens[cp_idx, original_seq_idx] + cp_seqlen
+                    # SYM对半切要将其再分割成两部分
+                    cp_packed_seq[cp_idx].append(original_seq[begin_idx: begin_idx + int(cp_seqlen / 2)])
+                    cp_packed_seq[cp_idx].append(original_seq[end_idx - (cp_seqlen - int(cp_seqlen / 2)): end_idx])
+                    begin_idx = begin_idx + int(cp_seqlen / 2)
+                    end_idx = end_idx - (cp_seqlen - int(cp_seqlen / 2))
+                    assert begin_idx <= end_idx, "something wrong"
+            # TODO: alignment对齐
+            for cp_idx in range(cp_size):
+                cp_packed_seqlen = cp_packed_cu_seqlens[cp_idx, -1]
+                cp_packed_seq_numpy = np.concatenate(cp_packed_seq[cp_idx])
+                assert len(cp_packed_seq_numpy) == cp_packed_seqlen, "length mismatches"
+                self._cp_packed_batch[cp_idx].append(cp_packed_seq_numpy)  
+            self._cp_packed_cu_seqlens_list.append(cp_packed_cu_seqlens)
 
     def packed_batch_size(self):
         assert self._packed_batch != None, "please ensure you have packed the bucket"
@@ -124,6 +175,19 @@ class Bucket:
     def packed_cu_seqlens_list(self):
         assert self._packed_cu_seqlens_list != None, "please ensure you have packed the bucket"
         return self._packed_cu_seqlens_list 
+    
+    def cp_packed_batch(self, cp_idx):
+        assert self._cp_packed_batch != None, "please ensure you have packed the bucket and generate the cp packed data"
+        assert cp_idx in self._cp_packed_batch, f"CP rank {cp_idx} out of index"
+        return self._cp_packed_batch[cp_idx]
+    
+    def cp_packed_cu_seqlens_list(self):
+        assert self._cp_packed_cu_seqlens_list != None, "please ensure you have packed the bucket and generate the cp packed data"
+        return self._cp_packed_cu_seqlens_list 
+    
+    def cp_packed_seqlen_list(self):
+        assert self._cp_packed_batch != None, "please ensure you have packed the bucket and generate the cp packed data"
+        return {cp_idx: [len(packed_seq) for packed_seq in packed_batch] for cp_idx, packed_batch in self._cp_packed_batch.items()}
  
 # 对global_batch中的seq按从小到大的顺序进行排序   
 def get_sorted_batch_and_len(global_batch: np.ndarray, pad_token: int):
@@ -149,14 +213,18 @@ def build_fake_batch_and_len(fake_seqlens: List[int], pad_token: int):
     return result, sorted_seqlens
 
 # 从global_batch中取出batch_indices的seqs并进行截断后分别构成两个buckets
-def get_input_and_label_buckets(global_batch: np.ndarray, pad_token: int, batch_indices: List[int], max_seqlen: int, alignment: int):
+# alignment来保证之后seqlen会padding到alignment的倍数
+# valid_alignment来控制原始seqlen是alignment的倍数
+# 目前只有CP时候为了整除会用到valid_alignment
+def get_input_and_label_buckets(global_batch: np.ndarray, pad_token: int, batch_indices: List[int], max_seqlen: int, alignment: int = 128, valid_alignment: int = 1):
     bucket_batch = global_batch[batch_indices]
     bucket_valid_tokens = np.sum(bucket_batch != pad_token, axis=1)
     input_bucket = Bucket(pad_token, max_seqlen, alignment)
     label_bucket = Bucket(pad_token, max_seqlen, alignment)
     for seq, vailid_tokens in zip(bucket_batch, bucket_valid_tokens):
-        input_bucket.add_data(seq, vailid_tokens - 1)
-        label_bucket.add_data(seq[1:], vailid_tokens - 1)
+        aligned_valid_tokens = (vailid_tokens - 1) // valid_alignment * valid_alignment
+        input_bucket.add_data(seq, aligned_valid_tokens)
+        label_bucket.add_data(seq[1:], aligned_valid_tokens)
     return input_bucket, label_bucket
 
 if __name__ == '__main__':

@@ -929,6 +929,9 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
       _p2p_events.emplace_back(std::move(event));
       // HT_LOG_INFO << local_device << ": nccl group end";
     }
+
+    // 2025.2.6 Update: parallel attn op内部会自动根据当前graph的CUR_MICRO_BATCH_ID去选择ctx
+    /*
     // parallel attn op算子手动实现且比较复杂
     // 目前单独维护attn ctx
     // 这里需要从外部传入micro batch id来确定 fwd存/bwd取 哪个attn ctx
@@ -939,6 +942,7 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         dynamic_cast<ParallelAttentionGradientOpImpl&>(op->body()).set_attn_ctx_num(micro_batch_id);
       }
     }
+    */
 
     // variable can be directly fetched, needn't save in tensor2data
     // AMP data transfer can be directly fetched, needn't save in tensor2data
@@ -968,8 +972,17 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
         auto& data = it->second;
         if (data->device() != input->placement() ||
             data->dtype() != input->dtype()) {
-          tensor2data[input->id()] = NDArray::to(data, input->placement(), input->dtype(),
-                                                 op->instantiation_ctx().stream_index);
+          if (data->device().is_cpu() && input->placement().is_cuda()) {
+            tensor2data[input->id()] = NDArray::to(data, input->placement(), input->dtype(),
+                                                   kH2DStream);
+            auto event = std::make_unique<hetu::impl::CUDAEvent>(input->placement());
+            event->Record(Stream(input->placement(), kH2DStream));
+            event->Block(op->instantiation_ctx().stream());
+          } else {
+            // TODO: use another stream for async data transfer
+            tensor2data[input->id()] = NDArray::to(data, input->placement(), input->dtype(),
+                                                   op->instantiation_ctx().stream_index);
+          }
         }
         input_val = tensor2data[input->id()];
         // should free memory until op async compute complete!!!
@@ -1205,6 +1218,7 @@ void ExecutableGraph::GetExecEnvs() {
 // 我们将这一部分单独提取出来做成一个函数来增加代码的可读性
 NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches, 
                                         const FeedDict& feed_dict, 
+                                        const IntSymbolDict& int_symbol_dict,
                                         const int num_micro_batches) {
   auto local_device = hetu::impl::comm::GetLocalDevice();
   // calculate params
@@ -1366,14 +1380,11 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
     auto& tensor2data = tensor2data_list[micro_batch_id];
     auto& tensor2degrees = tensor2degrees_list[micro_batch_id];
     auto& runtime_ctx = runtime_ctx_list[micro_batch_id];
+    // set micro batch ctx
+    // int_symbol_dict now consists of seqlens needed in parallel attn op
+    SetMicroBatchCtx(micro_batch_id, int_symbol_dict);
     // set arithmetic shape
     SetShapePlan(_active_shape_plan_list[micro_batch_id]);
-    for (auto& tensor: _leaf_symbolic_tensor_list) {
-      if(HasTensorShape(tensor)){
-        tensor->set_symbolic_shape(GetTensorShape(tensor));
-      }
-    }
-    UpdateExecShapePlan(runtime_ctx);
     // set symbolic shape
     // extra shape deduction in UpdateExecShapePlan() may need it
     for (auto& tensor: _leaf_symbolic_tensor_list) {
@@ -1641,7 +1652,7 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
 }
 
 NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches, 
-                                 const FeedDict& feed_dict, const int num_micro_batches,
+                                 const FeedDict& feed_dict, const IntSymbolDict& int_symbol_dict, const int num_micro_batches,
                                  RunLevel run_level, const double grad_scale) {
   
   GetExecEnvs();
@@ -2155,7 +2166,7 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
 
   TIK(crucial_run);
   // ****核心的exec graph执行部分****
-  auto results = CrucialRun(fetches, feed_dict, num_micro_batches);
+  auto results = CrucialRun(fetches, feed_dict, int_symbol_dict, num_micro_batches);
   auto profiler_optional = hetu::impl::Profile::get_cur_profile();
   bool is_analysis_perf = false;
   if (is_analysis_perf || _straggler_flag || profiler_optional) {

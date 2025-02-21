@@ -1,8 +1,9 @@
 import os
 import socket
 import hetu as ht
+from hetu.rpc.kv_store import KeyValueStoreClient, ProducerConsumer
 
-def distributed_init(ngpus, server_addr, server_port):
+def distributed_init(ngpus, server_addr, server_port, need_kv_store=False):
     if 'HETU_LOCAL_HOSTNAME' not in os.environ:
         # 通过socket获取主机名并设置环境变量
         hostname = socket.gethostname()
@@ -12,6 +13,9 @@ def distributed_init(ngpus, server_addr, server_port):
     ht.init_comm_group(ngpus, server_address = server_addr + ":" + server_port)
     local_device = ht.local_device()
     all_devices = ht.global_device_group()
+    if need_kv_store:
+        kv_store_client = KeyValueStoreClient(address = server_addr + ":" + server_port)
+        return local_device, all_devices, kv_store_client
     return local_device, all_devices
 
 def parallel_data_provider(global_data, ds_union, device_group_index, device_index):

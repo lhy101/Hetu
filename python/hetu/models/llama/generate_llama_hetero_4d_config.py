@@ -116,6 +116,8 @@ def generate_llama_hetero_4d_config(cp_list, rank_to_device_mapping, unused_rank
                     'dup': dp_cp_union,
                     'device_group_union': dg_union_list[block_id],
                     'type': 'variable'
+                },
+                'activation_func': {
                 }
             }
         }

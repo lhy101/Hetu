@@ -852,6 +852,8 @@ NDArray NDArray::reshape(const NDArray& input, const HTShape& new_shape,
 }
 
 NDArray NDArray::view(const NDArray& input, const HTShape& view_shape) {
+  HT_ASSERT(input->is_contiguous())
+    << "NDArray::view should guaurantee input is contiguous";
   NDArrayMeta output_meta = input->meta();
   output_meta.view(view_shape);
   return NDArray(output_meta, input->storage(), input->storage_offset());
@@ -1832,6 +1834,41 @@ NDArray NDArray::copy(const NDArray& input, StreamIndex stream_id,
   Stream stream(out_device, stream_id);
   HT_DISPATCH_KERNEL_CPU_AND_CUDA(out_device.type(), __FUNCTION__,
                                   hetu::impl::DataTransfer, input, out, stream);
+  return out;
+}
+
+// 在第一维取出indices（begin index和end index组成的很多的pair）中的slice然后拷贝成连续的一块
+// 目前只会用在CP + packing中
+// TODO: 实现一个kernel来完成这个功能
+NDArray NDArray::copy_multi_slices(const NDArray& input, const std::vector<std::pair<int32_t, int32_t>> indices,
+                                   StreamIndex stream_id, NDArray& output) {
+  HTShape output_shape(input->shape());
+  int64_t total_span = 0;
+  for (const auto& begin_end_index : indices) {
+    total_span += begin_end_index.second - begin_end_index.first;
+  }
+  output_shape.at(0) = total_span;
+  NDArray out;
+  if (output.is_defined()) {
+    HT_ASSERT (output->shape() == output_shape)
+      << "output shape mismatches with input shape & indices";
+    out = output;
+  } else {
+    out = NDArray::empty(output_shape, input->device(), input->dtype(), stream_id);
+  }
+  int64_t acc_index = 0;
+  for (const auto& begin_end_index : indices) {
+    HTShape from_begin_pos(input->shape().size(), 0);
+    HTShape to_begin_pos(input->shape().size(), 0);
+    HTShape slice_shape(input->shape());
+    from_begin_pos.at(0) = begin_end_index.first;
+    to_begin_pos.at(0) = acc_index;
+    slice_shape.at(0) = begin_end_index.second - begin_end_index.first;
+    auto from_slice = NDArray::slice(input, from_begin_pos, slice_shape, stream_id);
+    auto to_slice = NDArray::slice(out, to_begin_pos, slice_shape, stream_id);
+    NDArray::copy(from_slice, stream_id, to_slice);
+    acc_index += slice_shape.at(0);
+  }
   return out;
 }
 

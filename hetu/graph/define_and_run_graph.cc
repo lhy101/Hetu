@@ -1149,7 +1149,7 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
 // 目前一个exec graph支持多个shape plan
 // 即允许feed_dict的shape（包括batch_size以及seq_len等）可变
 NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches,
-                                   const FeedDict& feed_dict, const int num_micro_batches,
+                                   const FeedDict& feed_dict, const IntSymbolDict& int_symbol_dict, const int num_micro_batches,
                                    const int compute_strategy_id, const int optimize_strategy_id, RunLevel run_level,
                                    bool save_checkpoint, const double grad_scale) {
   _run_level = run_level;
@@ -1171,7 +1171,8 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
         feed_dict_shape[kv.first] = micro_batches[0]->shape();
       }
     } else {
-      HT_ASSERT(kv.second.size() == num_micro_batches);
+      HT_ASSERT(kv.second.size() == num_micro_batches)
+        << kv.second.size() << " mismatches with num_micro_batches " << num_micro_batches;
       for (int i = 0; i < num_micro_batches; i++) {
         feed_dict_shape_list[i][kv.first] = kv.second[i]->shape();
       }
@@ -1240,6 +1241,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
       HT_RUNTIME_ERROR << "Currently we use the ds of loss to deduce pipeline num"
         << ", so the ds union of loss shouldn't be hetero on other dim except for 0";
     }
+    SetMicroBatchCtx(micro_batch_idx, int_symbol_dict);
     Instantiate(std::move(global_topo), std::move(shape_plan), pipeline_num);
     // 补上fetches（其在instantiate中不需要用到，但是plan需要进行记录）
     auto& new_plan = _exec_graph_plan_pool.back();
@@ -1291,6 +1293,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
     // 需要推导新的shape plan
     if (!in_shape_plan_pool) {
       HT_LOG_DEBUG << "DeduceShapePlan needed for micro batch " << idx;
+      SetMicroBatchCtx(idx, int_symbol_dict);
       DeduceShapePlan(exec_graph_plan, feed_dict, feed_dict_shape_list[idx]);
       // 新的shape plan就是shape plan pool中的最后一个
       next_active_shape_plan_list[idx] = exec_graph_plan.shape_plan_pool.size() - 1;
@@ -1333,7 +1336,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   if (exec_graph->NeedRank(hetu::impl::comm::DeviceToWorldRank(local_device))) {
     Graph::push_graph_ctx(exec_graph->id()); // 防止exec graph run内部MakeOp时忘记加
     exec_graph->Run(exec_loss, exec_fetches, 
-                    exec_feed_dict, num_micro_batches, 
+                    exec_feed_dict, int_symbol_dict, num_micro_batches, 
                     RunLevel::TOPO, grad_scale);
     Graph::pop_graph_ctx();
   }
@@ -1608,7 +1611,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   if (exec_graph->NeedRank(hetu::impl::comm::DeviceToWorldRank(local_device))) {
     Graph::push_graph_ctx(exec_graph->id()); // 防止exec graph run内部MakeOp时忘记加
     ret = exec_graph->Run(exec_loss, exec_fetches, 
-                          exec_feed_dict, num_micro_batches, 
+                          exec_feed_dict, int_symbol_dict, num_micro_batches, 
                           run_level, grad_scale);
     Graph::pop_graph_ctx();
   }

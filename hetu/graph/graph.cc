@@ -56,6 +56,17 @@ void Graph::Init() {
     Graph::_make_new_graph<DefineAndRunGraph>("default_define_and_run");
 }
 
+void Graph::SetMicroBatchCtx(size_t micro_batch_id, const IntSymbolDict& int_symbol_dict) {
+  CUR_MICRO_BATCH_ID = micro_batch_id;
+  for (const auto& kv : int_symbol_dict) {
+    const IntSymbol& int_symbol = kv.first;
+    const std::vector<int64_t>& int_list = kv.second;
+    HT_ASSERT(micro_batch_id < int_list.size())
+      << "Micro batch id " << micro_batch_id << " is out of range";
+    int_symbol->set_val(int_list.at(micro_batch_id));
+  }
+}
+
 Operator& Graph::MakeOp(std::shared_ptr<OpInterface> body, TensorList inputs,
                         OpMeta op_meta) {
   Graph::InitOnce();

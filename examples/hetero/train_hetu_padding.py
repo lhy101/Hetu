@@ -183,7 +183,7 @@ def pretrain(args):
                 assert cp == cp_list[0], "homo setting should have the same cp degree"
             assert global_seq_len % cp_list[0] == 0, \
                 f'gsl={global_seq_len} must be divided by cp={cp_list[0]}'
-            pipeline_id = all_devices.get_index(local_device) % dcp_size
+            pipeline_id = all_devices.get_index(local_device) % (dcp_size * args.gpus_per_stage) // args.gpus_per_stage
             dp_group_id = pipeline_id // cp_list[0]
             accumulate_micro_batch_num = [(i * gbs_per_dp // micro_batch_size) for i in range(0, dp_size + 1)]
             seq_len = global_seq_len // cp_list[0]
@@ -214,14 +214,14 @@ def pretrain(args):
             # ---- hetero pipeline ----
             if args.hetero_layers == "":
                 # 默认均分stage
-                pp = all_devices.num_devices // dcp_size // args.hetero_stage_gpus
+                pp = all_devices.num_devices // dcp_size // args.gpus_per_stage
                 hetero_stages = [pp for _ in range(dcp_size)]
             else:
                 hetero_stages = [len(pipeline) for pipeline in ast.literal_eval(args.hetero_layers)]
                 assert len(hetero_stages) == dcp_size, f"len of hetero_stages should be equal to dcp={dcp_size}"
             accumulate_ranks = 0
             for i, stage_num in enumerate(hetero_stages):
-                accumulate_ranks += stage_num * args.hetero_stage_gpus
+                accumulate_ranks += stage_num * args.gpus_per_stage
                 if accumulate_ranks > curr_rank_id:
                     pipeline_id = i
                     break
@@ -361,7 +361,7 @@ if __name__ == '__main__':
         "--hetero", action="store_true", help="use hetero training strategy."
     )
     parser.add_argument(
-        '--hetero_stage_gpus', type=int, default=2, help='num of gpus of a single stage (to degree)'
+        '--gpus_per_stage', type=int, default=2, help='num of gpus of a single stage (to degree)'
     )
     parser.add_argument(
         '--hetero_layers', type=str, default="", help='hetero layers.'
