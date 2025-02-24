@@ -515,10 +515,12 @@ void AttnCommRing::PrepareStorageFwd(const NDArray& local_q, const NDArray& loca
                                   kFloat, 
                                   _stream_idx);
   }
+  NDArray::full_(_softmax_lse, -std::numeric_limits<float>::infinity(), _stream_idx);
   _out = NDArray::empty(HTShape{_batch_size, _seq_len_list[_ring_idx], _q_num_heads, _head_dim},
                         _local_device, 
                         dtype, 
                         _stream_idx);
+  NDArray::full_(_out, 0, _stream_idx);
   // 只有fwd需要ExecCorr
   // 使用transpose好的
   // 在SaveCtx时再transpose回来
@@ -534,8 +536,10 @@ void AttnCommRing::PrepareStorageFwd(const NDArray& local_q, const NDArray& loca
                                                  _local_device,
                                                  kFloat,
                                                  _stream_idx);
-  }                                         
+  }  
+  NDArray::full_(_acc_softmax_lse_transposed, -std::numeric_limits<float>::infinity(), _stream_idx);                                       
   _acc_out = local_out;
+  NDArray::full_(_acc_out, 0, _stream_idx);
   // 结束
   _is_storage_prepared = true;
   // HT_LOG_DEBUG << "[ParallelAttn]: PrepareStorageFwd end";
@@ -645,6 +649,9 @@ void AttnCommRing::ExecCorr(const NDArray& out, const NDArray& softmax_lse,
   // HT_LOG_DEBUG << "[ParallelAttn]: ExecCorr end";
 }
 
+// TODO: support transformer engine fused attn
+// which sopports cu_seqlens_q(k)_padded and can avoid many copy
+// https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/c/fused_attn.html
 void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx, 
                                  const NDArray& q, const NDArray& k, const NDArray& v,
                                  NDArray& out, NDArray& softmax_lse, NDArray& rng_state,
@@ -676,7 +683,9 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
   }
   auto& attn_info = _attn_info_list.at(q_idx * _ring_size + kv_idx);
   bool is_causal = attn_info->is_causal();
-  NDArray q_slice = q, k_slice = k, v_slice = v;
+  NDArray q_slice = q, k_slice = k, v_slice = v, out_slice = out, softmax_lse_slice = softmax_lse;
+  NDArray grad_output_slice = grad_output, dq_slice = dq, dk_slice = dk, dv_slice = dv;
+  NDArray q_3d, k_3d, v_3d, out_3d, softmax_lse_2d, grad_output_3d, dq_3d, dk_3d, dv_3d;
   if (!_packing) {
     HT_ASSERT(attn_info->get_mask() != AttnMask::EMPTY)
       << "currently empty attn is handled outside this func";
@@ -685,6 +694,16 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
       HTShape slice_shape = q->shape();
       slice_shape[1] = attn_info->get_valid_len();
       q_slice = NDArray::slice(q, begin_pos, slice_shape, _stream_idx);
+      out_slice = NDArray::slice(out, begin_pos, slice_shape, _stream_idx);
+      if (!is_bwd) {
+        softmax_lse_slice = NDArray::empty({softmax_lse->shape(0), softmax_lse->shape(1), attn_info->get_valid_len()}, 
+                                           softmax_lse->device(), softmax_lse->dtype(), _stream_idx);
+      } else {
+        softmax_lse_slice = NDArray::contiguous(NDArray::slice(softmax_lse, {0, 0, q->shape(1) - attn_info->get_valid_len()},
+                                                               {softmax_lse->shape(0), softmax_lse->shape(1), attn_info->get_valid_len()}, _stream_idx), _stream_idx);
+        grad_output_slice = NDArray::slice(grad_output, begin_pos, slice_shape, _stream_idx);
+        dq_slice = NDArray::slice(dq, begin_pos, slice_shape, _stream_idx);
+      }
     } 
     if (attn_info->get_mask() == AttnMask::COL) {
       HTShape begin_pos = {0, 0, 0, 0};
@@ -692,6 +711,10 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
       slice_shape[1] = attn_info->get_valid_len();
       k_slice = NDArray::slice(k, begin_pos, slice_shape, _stream_idx);
       v_slice = NDArray::slice(v, begin_pos, slice_shape, _stream_idx);
+      if (is_bwd) {
+        dk_slice = NDArray::slice(dk, begin_pos, slice_shape, _stream_idx);
+        dv_slice = NDArray::slice(dv, begin_pos, slice_shape, _stream_idx);
+      }
     }
   }
   // packing需要拿attn info的valid indices来获取qkv的slice
@@ -703,19 +726,51 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
     }
     HT_ASSERT(q->shape(0) == 1 && k->shape(0) == 1 && v->shape(0) == 1)
       << "batch dim should be 1 if packing";
-    auto q_3d = NDArray::view(q, {q->shape(1), q->shape(2), q->shape(3)});
-    auto k_3d = NDArray::view(k, {k->shape(1), k->shape(2), k->shape(3)});
-    auto v_3d = NDArray::view(v, {v->shape(1), v->shape(2), v->shape(3)});
+    q_3d = NDArray::view(q, {q->shape(1), q->shape(2), q->shape(3)});
+    k_3d = NDArray::view(k, {k->shape(1), k->shape(2), k->shape(3)});
+    v_3d = NDArray::view(v, {v->shape(1), v->shape(2), v->shape(3)});
+    out_3d = NDArray::view(out, {out->shape(1), out->shape(2), out->shape(3)});
+    softmax_lse_2d = NDArray::view(softmax_lse, {softmax_lse->shape(1), softmax_lse->shape(2)});
+    if (is_bwd) {
+      grad_output_3d = NDArray::view(grad_output, {grad_output->shape(1), grad_output->shape(2), grad_output->shape(3)});
+      dq_3d = NDArray::view(dq, {dq->shape(1), dq->shape(2), dq->shape(3)});
+      dk_3d = NDArray::view(dk, {dk->shape(1), dk->shape(2), dk->shape(3)});
+      dv_3d = NDArray::view(dv, {dv->shape(1), dv->shape(2), dv->shape(3)});
+    }
     if (!is_causal) {
       // TODO: 可能有的不需要copy
       // 另外q_slice可以复用
-      q_slice = NDArray::copy_multi_slices(q_3d, attn_info->get_valid_indices_q(), _stream_idx);
-      k_slice = NDArray::copy_multi_slices(k_3d, attn_info->get_valid_indices_k(), _stream_idx);
-      v_slice = NDArray::copy_multi_slices(v_3d, attn_info->get_valid_indices_k(), _stream_idx);
-    } else {
+      q_slice = NDArray::copy_multi_slices(q_3d, attn_info->get_valid_indices_q(), 0, _stream_idx);
+      k_slice = NDArray::copy_multi_slices(k_3d, attn_info->get_valid_indices_k(), 0, _stream_idx);
+      v_slice = NDArray::copy_multi_slices(v_3d, attn_info->get_valid_indices_k(), 0 ,_stream_idx);
+      auto total_valid_len_q = q_slice->shape(0), total_valid_len_k = k_slice->shape(0);
+      if (!is_bwd) {
+        out_slice = NDArray::empty({total_valid_len_q, out_3d->shape(1), out_3d->shape(2)},
+                                   out_3d->device(), out_3d->dtype(), _stream_idx);      
+        softmax_lse_slice = NDArray::empty({softmax_lse_2d->shape(0), total_valid_len_q},
+                                           softmax_lse_2d->device(), softmax_lse_2d->dtype(), _stream_idx);
+      } else {
+        out_slice = NDArray::copy_multi_slices(out_3d, attn_info->get_valid_indices_q(), 0, _stream_idx);
+        softmax_lse_slice = NDArray::copy_multi_slices(softmax_lse_2d, attn_info->get_valid_indices_q(), 1, _stream_idx);
+        grad_output_slice = NDArray::copy_multi_slices(grad_output_3d, attn_info->get_valid_indices_q(), 0, _stream_idx);
+        dq_slice = NDArray::empty_like(q_slice, _stream_idx);
+        dk_slice = NDArray::empty_like(k_slice, _stream_idx);
+        dv_slice = NDArray::empty_like(v_slice, _stream_idx);
+      }
+    }
+    // is_causal情形可以节省一些copy开销 
+    else {
       q_slice = q_3d;
       k_slice = k_3d;
       v_slice = v_3d;
+      out_slice = out_3d;
+      softmax_lse_slice = softmax_lse_2d;
+      if (is_bwd) {
+        grad_output_slice = grad_output_3d;
+        dq_slice = dq_3d;
+        dk_slice = dk_3d;
+        dv_slice = dv_3d;
+      }
     }
   }
 
@@ -726,16 +781,19 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
       // 这里的softmax_lse与out都是一个block的局部的输出
       HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttn", hetu::impl::FlashAttn,
                                    q_slice, k_slice, v_slice, out, q_slice,
-                                   k_slice, v_slice, out, softmax_lse,
+                                   k_slice, v_slice, out_slice, softmax_lse_slice,
                                    empty_ndarray, rng_state, _p_dropout, _softmax_scale,
                                    is_causal, false, Stream(_local_device, _stream_idx));
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda end, out is " << out;
+      auto original_softmax_lse_slice = NDArray::slice(softmax_lse, {0, 0, q->shape(1) - attn_info->get_valid_len()},
+                                                       {softmax_lse->shape(0), softmax_lse->shape(1), attn_info->get_valid_len()}, _stream_idx);
+      NDArray::copy(softmax_lse_slice, _stream_idx, original_softmax_lse_slice);
     } else {
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnGradientCuda begin";
       // 这里的softmax_lse与out则是全部block累积的
       HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnGradient", hetu::impl::FlashAttnGradient,
-                                   grad_output, q_slice, k_slice, v_slice, out, softmax_lse, rng_state, 
-                                   dq, dk, dv, _p_dropout, _softmax_scale,
+                                   grad_output_slice, q_slice, k_slice, v_slice, out_slice, softmax_lse_slice, rng_state, 
+                                   dq_slice, dk_slice, dv_slice, _p_dropout, _softmax_scale,
                                    is_causal, Stream(_local_device, _stream_idx));
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnGradientCuda end";
     }
@@ -743,27 +801,32 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
   // packing调用varlen接口
   // 且需要把batch维度给去掉 
   else {
-    auto out_3d = NDArray::view(out, {out->shape(1), out->shape(2), out->shape(3)});
-    auto softmax_lse_2d = NDArray::view(softmax_lse, {softmax_lse->shape(1), softmax_lse->shape(2)});
     if (!is_bwd) {
+      HT_LOG_TRACE << _local_device << ": before attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
+        << ", valid cu_seqlens_q is " << attn_info->get_valid_cu_seqlens_q() << ", valid cu_seqlens_k is " << attn_info->get_valid_cu_seqlens_k();
       HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlen", hetu::impl::FlashAttnVarlen, 
                                    q_slice, k_slice, v_slice, attn_info->get_valid_cu_seqlens_q(), attn_info->get_valid_cu_seqlens_k(), 
-                                   out_3d, q_slice, k_slice, v_slice, out_3d, softmax_lse_2d,
+                                   out_slice, q_slice, k_slice, v_slice, out_slice, softmax_lse_slice,
                                    empty_ndarray, rng_state, _max_seqlen_q, _max_seqlen_k, 
                                    _p_dropout, _softmax_scale, false,
                                    is_causal, false, Stream(_local_device, _stream_idx));
+      NDArray::revert_copy_multi_slices(out_slice, attn_info->get_valid_indices_q(), 0, _stream_idx, out_3d);
+      NDArray::revert_copy_multi_slices(softmax_lse_slice, attn_info->get_valid_indices_q(), 1, _stream_idx, softmax_lse_2d);
+      HT_LOG_TRACE << _local_device << ": after attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
+        << ", out slice sum is " << NDArray::sum(out_slice) << ", softmax_lse slice sum is " << NDArray::sum(softmax_lse_slice);
     } else {
-      auto grad_output_3d = NDArray::view(grad_output, {grad_output->shape(1), grad_output->shape(2), grad_output->shape(3)});
-      auto dq_3d = NDArray::view(dq, {dq->shape(1), dq->shape(2), dq->shape(3)});
-      auto dk_3d = NDArray::view(dk, {dk->shape(1), dk->shape(2), dk->shape(3)});
-      auto dv_3d = NDArray::view(dv, {dv->shape(1), dv->shape(2), dv->shape(3)});
+      HT_LOG_TRACE << _local_device << ": before attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
+        << ", valid cu_seqlens_q is " << attn_info->get_valid_cu_seqlens_q() << ", valid cu_seqlens_k is " << attn_info->get_valid_cu_seqlens_k();
       HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "FlashAttnVarlenGradient", hetu::impl::FlashAttnVarlenGradient, 
-                                   grad_output_3d, q_slice, k_slice, v_slice, attn_info->get_valid_cu_seqlens_q(), attn_info->get_valid_cu_seqlens_k(), 
-                                   out_3d, softmax_lse_2d, rng_state, 
-                                   dq_3d, dk_3d, dv_3d, _max_seqlen_q, _max_seqlen_k,
+                                   grad_output_slice, q_slice, k_slice, v_slice, attn_info->get_valid_cu_seqlens_q(), attn_info->get_valid_cu_seqlens_k(), 
+                                   out_slice, softmax_lse_slice, rng_state, 
+                                   dq_slice, dk_slice, dv_slice, _max_seqlen_q, _max_seqlen_k,
                                    _p_dropout, _softmax_scale, false,
                                    is_causal, Stream(_local_device, _stream_idx));
-      HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
+      NDArray::revert_copy_multi_slices(dq_slice, attn_info->get_valid_indices_q(), 0, _stream_idx, dq_3d);
+      NDArray::revert_copy_multi_slices(dk_slice, attn_info->get_valid_indices_k(), 0, _stream_idx, dk_3d);
+      NDArray::revert_copy_multi_slices(dv_slice, attn_info->get_valid_indices_k(), 0, _stream_idx, dv_3d);
+      HT_LOG_TRACE << _local_device << ": after attn " << q_idx << "-th q slice sum is " << NDArray::sum(q_slice) << " and " << kv_idx << "-th k(v) slice sum is " << NDArray::sum(k_slice)
         << ", dq sum is " << NDArray::sum(dq_3d) << ", dk sum is " << NDArray::sum(dk_3d) << ", dv sum is " << NDArray::sum(dv_3d);
     }
   }
@@ -977,7 +1040,10 @@ void AttnCommRing::Run(bool is_bwd) {
       next_kv_block->wait_until_attn_done(comm_stream);
       cur_kv_block->wait_until_grad_done(comm_stream);
       {
-        // HT_LOG_INFO << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) before comm: cur_kv_block 3d all sum is " << NDArray::sum(cur_kv_block->get_3d_all());
+        HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) before comm: cur block acc_dk sum is " 
+          << NDArray::sum(cur_kv_block->get_4d_acc_dk()) << ", cur block acc_dv sum is " << NDArray::sum(cur_kv_block->get_4d_acc_dv())
+          << ", cur block k sum is " << NDArray::sum(cur_kv_block->get_4d_k()) << ", cur block v sum is " << NDArray::sum(cur_kv_block->get_4d_v())
+          << ", _acc_out sum is " << NDArray::sum(_acc_out) << ", _grad_output sum is " << NDArray::sum(_grad_output) << ", _acc_softmax_lse is " << NDArray::sum(_acc_softmax_lse);
         if (_need_profile) _comm_profile_start_event_list.at(round)->Record(comm_stream);
         // 第一次无grad可以捎带
         if (round == 0) {
@@ -1005,6 +1071,9 @@ void AttnCommRing::Run(bool is_bwd) {
         dq = NDArray::empty_like(_local_q, _stream_idx);
         dk = NDArray::empty_like(cur_kv_block->get_4d_k(), _stream_idx);
         dv = NDArray::empty_like(cur_kv_block->get_4d_v(), _stream_idx);
+        NDArray::full_(dq, 0, _stream_idx);
+        NDArray::full_(dk, 0, _stream_idx);
+        NDArray::full_(dv, 0, _stream_idx);
       }
       // 计算时当前的cur_kv_block所在的storage必须已经完成了通信
       if (!empty_round) cur_kv_block->wait_until_comm_done(comp_stream);
@@ -1023,13 +1092,12 @@ void AttnCommRing::Run(bool is_bwd) {
         // 如果当前block attn是空的
         // 那么不需要进行grad的累积
         if (!empty_round) {
-          HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) before accumulate grad: acc_dk sum is " << NDArray::sum(acc_dk)
-            << ", acc_dv sum is " << NDArray::sum(acc_dv) << ", acc_dq sum is " << NDArray::sum(_acc_dq);
+          HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) before next kv block accumulate grad: acc_dk sum is " << NDArray::sum(acc_dk)
+            << ", acc_dv sum is " << NDArray::sum(acc_dv) << ", acc_dq sum is " << NDArray::sum(_acc_dq)
+            << ", dq sum is " << NDArray::sum(dq) << ", dk sum is " << NDArray::sum(dk) << ", dv sum is " << NDArray::sum(dv);
           NDArray::add(_acc_dq, dq, _stream_idx, _acc_dq);
           NDArray::add(acc_dk, dk, _stream_idx, acc_dk);
           NDArray::add(acc_dv, dv, _stream_idx, acc_dv);
-          HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) after accumulate grad: acc_dk sum is " << NDArray::sum(acc_dk)
-            << ", acc_dv sum is " << NDArray::sum(acc_dv) << ", acc_dq sum is " << NDArray::sum(_acc_dq);
         }
         if (_need_profile) _grad_profile_end_event_list.at(round)->Record(comp_stream);
       }
@@ -1244,7 +1312,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
   DeviceGroupList tp_group_list;
   std::vector<int64_t> seq_len_list;
   std::tie(ring_idx, tp_group_list, seq_len_list) = get_local_ring(op->input(0), _multi_seq_lens_symbol, _multi_cp_group_symbol);
-  // HT_LOG_DEBUG << "[ParallelAttn]: the tp group list is " << tp_group_list << " and seq len list is " << seq_len_list;
+  HT_LOG_DEBUG << "[ParallelAttn]: the tp group list is " << tp_group_list << " and seq len list is " << seq_len_list;
   
   // 实际运行
   // 开cp
@@ -1284,7 +1352,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
   // 不开cp
   else {
     // no ring-attn
-    // HT_LOG_DEBUG << "[ParallelAttn]: no fwd comm ring needed for " << local_device;
+    HT_LOG_DEBUG << "[ParallelAttn]: no fwd comm ring needed";
     attn_ctx()->rng_state_list = {NDArray::empty(HTShape{2},
                                                  Device(kCPU),
                                                  kInt64,
@@ -1327,14 +1395,17 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
                                                    kFloat,
                                                    stream_idx);
       attn_ctx()->acc_out = NDArray::view(reshaped_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
+      HT_LOG_TRACE << "varlen attn fwd inputs: cu_seqlens_q is " << cu_seqlens_q << " cu_seqlens_k is " << cu_seqlens_k
+        << ", q shape is " << attn_ctx()->q->shape() << ", q sum is " << NDArray::sum(attn_ctx()->q);
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttnVarlen, 
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, attn_ctx()->acc_out, attn_ctx()->q,
                                    attn_ctx()->k, attn_ctx()->v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), 
                                    max_seqlen_q, max_seqlen_k, 
-                                   p_dropout(), softmax_scale_, false,
+                                   p_dropout(), softmax_scale_, true,
                                    true, return_softmax(), op->instantiation_ctx().stream());
-      // HT_LOG_INFO << "Varlen attn cu_seqlens_q is " << cu_seqlens_q;
+      HT_LOG_TRACE << "varlen attn fwd outputs: softmax_lse shape is " << attn_ctx()->acc_softmax_lse->shape() << ", softmax_lse sum is " << NDArray::sum(attn_ctx()->acc_softmax_lse)
+        << ", out shape is " << attn_ctx()->acc_out->shape() << ", out sum is " << NDArray::sum(attn_ctx()->acc_out);
     }
   }
 }
@@ -1563,12 +1634,16 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
       auto dk_new = NDArray::view(NDArray::empty_like(dk, op->instantiation_ctx().stream().stream_index()), {batch_size_mul_seq_len, kv_num_heads, _head_dim});
       auto dv_new = NDArray::view(NDArray::empty_like(dv, op->instantiation_ctx().stream().stream_index()), {batch_size_mul_seq_len, kv_num_heads, _head_dim});
       reshaped_grad_output = NDArray::view(reshaped_grad_output, {batch_size_mul_seq_len, q_num_heads, _head_dim});
+      HT_LOG_TRACE << "varlen attn bwd inputs: cu_seqlens_q is " << cu_seqlens_q << " cu_seqlens_k is " << cu_seqlens_k
+        << ", q shape is " << attn_ctx()->q->shape() << ", softmax_lse shape is " << attn_ctx()->acc_softmax_lse->shape()
+        << ", q sum is " << NDArray::sum(attn_ctx()->q) << ", softmax_lse sum is " << NDArray::sum(attn_ctx()->acc_softmax_lse);
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(),
                                    hetu::impl::FlashAttnVarlenGradient, reshaped_grad_output,
                                    attn_ctx()->q, attn_ctx()->k, attn_ctx()->v, cu_seqlens_q, cu_seqlens_k, 
                                    attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse, attn_ctx()->rng_state_list.at(0), 
-                                   dq_new, dk_new, dv_new, max_seqlen_q, max_seqlen_k, p_dropout(), softmax_scale_, false,
+                                   dq_new, dk_new, dv_new, max_seqlen_q, max_seqlen_k, p_dropout(), softmax_scale_, true,
                                    true, op->instantiation_ctx().stream());
+      HT_LOG_TRACE << "varlen attn bwd outputs: dq sum is " << NDArray::sum(dq_new) << ", dk sum is " << NDArray::sum(dk_new) << ", dv sum is " << NDArray::sum(dv_new);
       dq_new = NDArray::view(dq_new, dq_shape);
       dk_new = NDArray::view(dk_new, dk_shape);
       dv_new = NDArray::view(dv_new, dv_shape);

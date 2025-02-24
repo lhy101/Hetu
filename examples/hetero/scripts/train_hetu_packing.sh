@@ -19,7 +19,7 @@ SERVER_PORT=${8:-"23456"}
 HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
 ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 
-CASE=2
+CASE=3
 if [[ ${CASE} -eq 0 ]]; then
 	HETERO=false
 	NUM_GPUS=8
@@ -38,14 +38,14 @@ elif [[ ${CASE} -eq 1 ]]; then
 	RECOMPUTE_LAYERS="[]"
 elif [[ ${CASE} -eq 2 ]]; then
 	HETERO=true
-	NUM_GPUS=4
+	NUM_GPUS=6
 	DP=1
-	CP_LIST="[2]"
+	CP_LIST="[3]"
 	TP=2
-	LAYERS_NUM_LIST="[[2],[2]]"
+	LAYERS_NUM_LIST="[[2],[2],[2]]"
 	UNUSED_RANK="[0]"
-	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:2,3:3}"
-	RECOMPUTE_LAYERS="[[],[]]"
+	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:2,3:3,4:4,5:5}"
+	RECOMPUTE_LAYERS="[[],[],[]]"
 elif [[ ${CASE} -eq 3 ]]; then
 	HETERO=true
 	NUM_GPUS=8

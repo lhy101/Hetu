@@ -1841,13 +1841,14 @@ NDArray NDArray::copy(const NDArray& input, StreamIndex stream_id,
 // 目前只会用在CP + packing中
 // TODO: 实现一个kernel来完成这个功能
 NDArray NDArray::copy_multi_slices(const NDArray& input, const std::vector<std::pair<int32_t, int32_t>> indices,
-                                   StreamIndex stream_id, NDArray& output) {
+                                   int64_t axis, StreamIndex stream_id, NDArray& output) {
   HTShape output_shape(input->shape());
   int64_t total_span = 0;
   for (const auto& begin_end_index : indices) {
     total_span += begin_end_index.second - begin_end_index.first;
   }
-  output_shape.at(0) = total_span;
+  auto parsed_axis = NDArrayMeta::ParseAxis(axis, input->ndim());
+  output_shape.at(parsed_axis) = total_span;
   NDArray out;
   if (output.is_defined()) {
     HT_ASSERT (output->shape() == output_shape)
@@ -1861,15 +1862,41 @@ NDArray NDArray::copy_multi_slices(const NDArray& input, const std::vector<std::
     HTShape from_begin_pos(input->shape().size(), 0);
     HTShape to_begin_pos(input->shape().size(), 0);
     HTShape slice_shape(input->shape());
-    from_begin_pos.at(0) = begin_end_index.first;
-    to_begin_pos.at(0) = acc_index;
-    slice_shape.at(0) = begin_end_index.second - begin_end_index.first;
+    from_begin_pos.at(parsed_axis) = begin_end_index.first;
+    to_begin_pos.at(parsed_axis) = acc_index;
+    slice_shape.at(parsed_axis) = begin_end_index.second - begin_end_index.first;
     auto from_slice = NDArray::slice(input, from_begin_pos, slice_shape, stream_id);
     auto to_slice = NDArray::slice(out, to_begin_pos, slice_shape, stream_id);
     NDArray::copy(from_slice, stream_id, to_slice);
-    acc_index += slice_shape.at(0);
+    acc_index += slice_shape.at(parsed_axis);
   }
   return out;
+}
+
+// copy_multi_slices的逆操作
+NDArray NDArray::revert_copy_multi_slices(const NDArray& input, const std::vector<std::pair<int32_t, int32_t>> indices,
+                                          int64_t axis, StreamIndex stream_id, NDArray& output) {
+  int64_t total_span = 0;
+  for (const auto& begin_end_index : indices) {
+    total_span += begin_end_index.second - begin_end_index.first;
+  }
+  auto parsed_axis = NDArrayMeta::ParseAxis(axis, input->ndim());
+  HT_ASSERT(output.is_defined() && total_span == input->shape(parsed_axis))
+    << "output should be defined and input axis " << parsed_axis << " should have length " << total_span << " but actual length is " << input->shape(parsed_axis);
+  int64_t acc_index = 0;
+  for (const auto& begin_end_index : indices) {
+    HTShape from_begin_pos(input->shape().size(), 0);
+    HTShape to_begin_pos(input->shape().size(), 0);
+    HTShape slice_shape(input->shape());
+    from_begin_pos.at(parsed_axis) = acc_index;
+    to_begin_pos.at(parsed_axis) = begin_end_index.first;
+    slice_shape.at(parsed_axis) = begin_end_index.second - begin_end_index.first;
+    auto from_slice = NDArray::slice(input, from_begin_pos, slice_shape, stream_id);
+    auto to_slice = NDArray::slice(output, to_begin_pos, slice_shape, stream_id);
+    NDArray::copy(from_slice, stream_id, to_slice);
+    acc_index += slice_shape.at(parsed_axis);
+  }
+  return output;
 }
 
 NDArray NDArray::contiguous(const NDArray& input, StreamIndex stream_id,

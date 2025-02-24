@@ -588,8 +588,12 @@ class NDArray : public shared_ptr_wrapper<NDArrayDef> {
                       NDArray& output = EMPTY);
 
   static NDArray copy_multi_slices(const NDArray& input, const std::vector<std::pair<int32_t, int32_t>> indices,
-                                   StreamIndex stream_id = DEFAULT_STREAM,
+                                   int64_t axis = 0, StreamIndex stream_id = DEFAULT_STREAM,
                                    NDArray& output = EMPTY);
+
+  static NDArray revert_copy_multi_slices(const NDArray& input, const std::vector<std::pair<int32_t, int32_t>> indices,
+                                          int64_t axis = 0, StreamIndex stream_id = DEFAULT_STREAM, 
+                                          NDArray& output = EMPTY);
 
   static NDArray contiguous(const NDArray& input,
                             StreamIndex stream_id = DEFAULT_STREAM,
