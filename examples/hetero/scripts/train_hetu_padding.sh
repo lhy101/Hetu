@@ -20,7 +20,7 @@ SERVER_PORT=${8:-"23456"}
 HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
 ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 
-CASE=2
+CASE=1
 if [[ ${CASE} -eq 0 ]]; then
 	HETERO=false
 	NUM_GPUS=8
@@ -28,7 +28,6 @@ if [[ ${CASE} -eq 0 ]]; then
 	PP=1
 	DP=1
 	CP=2
-	RECOMPUTE_LAYERS="[]"
 elif [[ ${CASE} -eq 1 ]]; then
 	HETERO=false
 	NUM_GPUS=8
@@ -36,7 +35,6 @@ elif [[ ${CASE} -eq 1 ]]; then
 	PP=1
 	DP=2
 	CP=1
-	RECOMPUTE_LAYERS="[]"
 elif [[ ${CASE} -eq 2 ]]; then
 	HETERO=true
 	NUM_GPUS=8
@@ -47,7 +45,6 @@ elif [[ ${CASE} -eq 2 ]]; then
 	MICRO_BATCH_NUM_LIST="[1,1]"
 	UNUSED_RANK="[1,3]"
 	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:7,3:6,4:4,5:5,6:3,7:2}"
-	RECOMPUTE_LAYERS="[[],[1],[1],[1]]"
 	SEQ_LEN_LIST="[128, 4, 100, 14]"
 else
     echo unknown CASE
@@ -84,8 +81,7 @@ python -m hetu.models.llama.generate_llama_4d_config \
 	--cp $CP \
 	--tp $TP \
 	--pp $PP \
-	--zero \
-	--recompute_layers $RECOMPUTE_LAYERS
+	--zero 
 
 CMD="python3 -u train_hetu_padding.py \
 --num_strategy=1 \
@@ -129,7 +125,6 @@ python -m hetu.models.llama.generate_llama_hetero_4d_config \
 	--hetero_layers $LAYERS_NUM_LIST \
 	--rank_to_device_mapping $RANK_TO_DEVICE_MAPPING \
 	--unused_rank $UNUSED_RANK \
-	--recompute_layers $RECOMPUTE_LAYERS \
 	--file_name "hetero_config.json"
 
 CMD="python3 -u train_hetu_padding.py \

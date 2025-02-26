@@ -40,9 +40,8 @@ Operator& DefineAndRunGraph::MakeOpInner(std::shared_ptr<OpInterface> body,
                                          TensorList inputs, OpMeta op_meta) {
   _check_all_inputs_in_graph(inputs, op_meta.extra_deps);
   // for optimization passes
-  // TODO: support multi-strategies offload
   op_meta = op_meta.set_multi_recompute(Recompute::multi_recompute())
-                   .set_is_cpu_offload(ActivationCPUOffload::enabled());
+                   .set_multi_cpu_offload(ActivationCPUOffload::multi_cpu_offload());
   auto& op = MakeAndAddOp(std::move(body), std::move(inputs), std::move(op_meta));
   if (op->op_meta().need_dequantization()) {
     OpId param_id = op->op_meta().parameter_dict["tensor_id"];
@@ -302,6 +301,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
   // *the logic of inferring the very first shape plan is in Instantiate()
   // that is because MakeOp can handle most of the cases automatically
   // InferShapePlan just aims to expand the shape plan pool for the data packing setting
+  HT_LOG_INFO << "DeduceShapePlan begin...";
   auto local_device = hetu::impl::comm::GetLocalDevice(); // debug use
   Tensor2ShapeMap shape_plan;
   Tensor2ShapeMap exec_shape_plan;
@@ -377,7 +377,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       HT_RUNTIME_ERROR << "During deducing shape of exec op " << exec_op << " with inputs " << exec_op->inputs()
         << " and shapes " << input_shapes << ", an error occurs: " << e.what();
     }
-    // HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
+    HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
     auto exec_output_shapes_size = exec_output_shapes.size();
     for (size_t i = 0; i < exec_output_shapes_size; i++) {
       // 设置symbolic shape叶子节点的shape
@@ -434,7 +434,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       HT_RUNTIME_ERROR << "During deducing shape of additional exec op " << exec_op << " with inputs " << exec_op->inputs()
         << " and shapes " << exec_input_shapes << ", an error occurs: " << e.what();
     }
-    // HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
+    HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
     /*
     if (is_batched_isend_irecv_op(exec_op) && exec_op->num_inputs() == 0) {
       HT_LOG_INFO << exec_op << " is no-send batched-isend-irecv op, the in dep linkers are " << exec_op->in_dep_linkers();
@@ -992,9 +992,16 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
     */
 
     Operator exec_op;
+    OpMeta exec_op_meta = op->op_meta();
+    if (exec_op_meta.fw_op_id != -1) {
+      auto it = op_to_exec_op_mapping.find(exec_op_meta.fw_op_id);
+      HT_ASSERT(it != op_to_exec_op_mapping.end())
+        << "cannot find define " << op << " corresponding fwd exec op";
+      exec_op_meta.fw_op_id = it->second->id();
+    }
     try {
       exec_op = Graph::MakeOp(op->_body, exec_inputs,
-        OpMeta().set(op->op_meta()).set_is_deduce_states(false).set_extra_deps(std::move(exec_in_deps)), *exec_graph);
+        OpMeta().set(exec_op_meta).set_is_deduce_states(false).set_extra_deps(std::move(exec_in_deps)), *exec_graph);
     } catch (const std::exception& e) {
       HTShapeList exec_input_shapes;
       exec_input_shapes.reserve(exec_inputs.size());

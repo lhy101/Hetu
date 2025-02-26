@@ -362,7 +362,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
       auto& comm_op = op;
       // 获取其所在的subgraph使得后续替换的op都出现在同样的subgraph中
       // 有如下几种可能
-      // 1、在optimize-compute bridge或compute-oprimize bridge的subgraph中
+      // 1、在optimize-compute bridge或compute-optimize bridge的subgraph中
       // 例如zero与grad相关的(split)-all-gather/-all-reduce/-reduce-scatter或batched-send-recv
       // 2、在pipeline layer的subgraph中
       // 例如pp相关的(batched)-send-recv
@@ -1006,10 +1006,15 @@ void ExecutableGraph::ComputeFunc(size_t& micro_batch_id, const OpRefList& topo,
     }
 
     // **** 调用op计算 ****
-    NDArrayList output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
+    NDArrayList output_vals;
+    try {
+      output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
+    } catch (const std::exception& e) {
+      HT_RUNTIME_ERROR << "During computing exec op " << op << " of micro batch " << micro_batch_id
+        << " with inputs " << op->inputs() << ", an error occurs: " << e.what();
+    }
     // checkOutputsMemory(op, micro_batch_id, input_vals, output_vals);
 
-    // auto output_vals = op->Compute(input_vals, runtime_ctx, micro_batch_id);
     if (is_shared_weight_or_grad_p2p(op)) {
       // HT_LOG_INFO << local_device << ": wte nccl group end";
       ncclGroupEnd_safe();

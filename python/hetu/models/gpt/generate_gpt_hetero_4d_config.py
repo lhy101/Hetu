@@ -3,7 +3,21 @@ import json
 import os
 import ast
 
-def generate_gpt_hetero_4d_config(cp_list, rank_to_device_mapping, unused_rank, hetero_layers, accumulate_hetero_stages, recompute_layers, num_layers=32, num_gpus=8, dp=2, tp=2, zero=True):
+# TODO: support multi-recompute and multi-offload
+def generate_gpt_hetero_4d_config(
+    cp_list, 
+    rank_to_device_mapping, 
+    unused_rank, 
+    hetero_layers, 
+    accumulate_hetero_stages, 
+    recompute_layers, 
+    num_layers=32, 
+    num_gpus=8, 
+    dp=2, 
+    tp=2, 
+    zero=True
+):
+    
     if dp == 1:
         zero = False
     

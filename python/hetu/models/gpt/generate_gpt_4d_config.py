@@ -3,7 +3,18 @@ import json
 import os
 import ast
 
-def generate_gpt_4d_config(recompute_layers, num_layers=32, num_gpus=8, dp=2, cp=1, tp=2, pp=2, zero=True):
+# TODO: support multi-recompute and multi-offload
+def generate_gpt_4d_config(
+    recompute_layers, 
+    num_layers=32, 
+    num_gpus=8, 
+    dp=2, 
+    cp=1, 
+    tp=2, 
+    pp=2, 
+    zero=True
+):
+    
     if dp == 1:
         zero = False
     num_layers_per_stage = num_layers // pp

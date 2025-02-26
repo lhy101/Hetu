@@ -2,8 +2,25 @@ import argparse
 import json
 import os
 import ast
+from hetu.utils.parallel import generate_recompute_config
 
-def generate_llama_hetero_4d_config(cp_list, rank_to_device_mapping, unused_rank, hetero_layers, accumulate_hetero_stages, recompute_layers, num_layers=32, num_gpus=8, dp=2, tp=2, zero=True):
+def generate_llama_hetero_4d_config(
+    cp_list, 
+    rank_to_device_mapping, 
+    unused_rank, 
+    hetero_layers, 
+    accumulate_hetero_stages, 
+    num_layers=32, 
+    num_gpus=8, 
+    dp=2, 
+    tp=2, 
+    zero=True,
+    recompute_granularity=None,
+    recompute_method=None,
+    recompute_num_layers=None,
+    recompute_layer_idxs_list=None
+):
+    
     if dp == 1:
         zero = False
     
@@ -32,10 +49,22 @@ def generate_llama_hetero_4d_config(cp_list, rank_to_device_mapping, unused_rank
             hybrid_device_group.append([rank_to_device_mapping[rank] for rank in ranks if rank not in unused_rank])
         tp_union_list.append(hybrid_tp_degree)
         dg_union_list.append(hybrid_device_group)
+        
+    recompute_config = generate_recompute_config(
+        dp_cp,
+        num_layers,
+        hetero_layers,
+        recompute_granularity=recompute_granularity,
+        recompute_method=recompute_method,
+        recompute_num_layers=recompute_num_layers,
+        recompute_layer_idxs_list=recompute_layer_idxs_list
+    )
 
     ds_parallel_config = {
         'zero': zero,
         'devices': list(range(num_gpus)),
+        'recompute_granularity': recompute_config.recompute_granularity,
+        'recompute_layer_idxs_list': recompute_config.recompute_layer_idxs_list,
         'input': {
             'split': {'0': dp_cp_union},
             'dup': tp_union_list[0],
@@ -77,7 +106,9 @@ def generate_llama_hetero_4d_config(cp_list, rank_to_device_mapping, unused_rank
         blocks_json = ds_parallel_config['llama']['blocks']
         blocks_json[f'blocks{block_id}'] = {
             'range': [block_id,],
-            'recompute': [(True if block_id in recompute_layers[i] else False) for i in range(dp_cp)],
+            'recompute': recompute_config.blocks_recompute[block_id],
+            'output_recompute': recompute_config.blocks_output_recompute[block_id],
+            'cpu_offload': [False for _ in range(dp_cp)],
             'rmsnorm1': {
                 'split': {'0': tp_union_list[block_id]},
                 'dup': dp_cp_union,
@@ -154,7 +185,16 @@ if __name__ == '__main__':
         '--zero', action='store_true', help='use zero or not.'
     )
     parser.add_argument(
-        '--recompute_layers', type=str, default="", help='layers to recompute.'
+        '--recompute_granularity', type=str, default="", help='recompute granularity: List["selevctive" or "full"].'
+    )
+    parser.add_argument(
+        '--recompute_method', type=str, default="", help='recompute method: List["uniform" or "block"].'
+    )
+    parser.add_argument(
+        '--recompute_num_layers', type=str, default="", help='recompute num layers: List[int].'
+    )
+    parser.add_argument(
+        '--recompute_layer_idxs_list', type=str, default="", help='recompute layer idxs list: List[List[int]].'
     )
     parser.add_argument(
         '--file_name', type=str, default="", help="file path to save."
@@ -182,13 +222,22 @@ if __name__ == '__main__':
     else:
         rank_to_device_mapping = ast.literal_eval(args.rank_to_device_mapping)
      
-    if args.recompute_layers == "":   
-        recompute_layers = [[] for _ in range(sum(cp_list))]
-    else:
-        recompute_layers = ast.literal_eval(args.recompute_layers)
-        assert len(recompute_layers) == sum(cp_list), "recompute layers state should align to dcp num"  
-        
-    ds_parallel_config = generate_llama_hetero_4d_config(cp_list, rank_to_device_mapping, ast.literal_eval(args.unused_rank), hetero_layers, accumulate_hetero_stages, recompute_layers, num_layers, args.num_gpus, args.dp, args.tp, args.zero)
+    ds_parallel_config = generate_llama_hetero_4d_config(
+        cp_list, 
+        rank_to_device_mapping, 
+        ast.literal_eval(args.unused_rank), 
+        hetero_layers, 
+        accumulate_hetero_stages, 
+        num_layers, 
+        args.num_gpus, 
+        args.dp, 
+        args.tp, 
+        args.zero,
+        None if args.recompute_granularity == "" else ast.literal_eval(args.recompute_granularity), 
+        None if args.recompute_method == "" else ast.literal_eval(args.recompute_method), 
+        None if args.recompute_num_layers == "" else ast.literal_eval(args.recompute_num_layers), 
+        None if args.recompute_layer_idxs_list == "" else ast.literal_eval(args.recompute_layer_idxs_list)
+    )
     
     save_folder = './ds_parallel_config/llama_hetero'
     if args.file_name == "":

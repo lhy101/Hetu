@@ -27,7 +27,6 @@ if [[ ${CASE} -eq 0 ]]; then
 	PP=1
 	DP=2
 	CP=2
-	RECOMPUTE_LAYERS="[]"
 elif [[ ${CASE} -eq 1 ]]; then
 	HETERO=false
 	NUM_GPUS=3
@@ -35,7 +34,6 @@ elif [[ ${CASE} -eq 1 ]]; then
 	PP=1
 	DP=1
 	CP=3
-	RECOMPUTE_LAYERS="[]"
 elif [[ ${CASE} -eq 2 ]]; then
 	HETERO=true
 	NUM_GPUS=6
@@ -45,7 +43,6 @@ elif [[ ${CASE} -eq 2 ]]; then
 	LAYERS_NUM_LIST="[[2],[2],[2]]"
 	UNUSED_RANK="[0]"
 	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:2,3:3,4:4,5:5}"
-	RECOMPUTE_LAYERS="[[],[],[]]"
 elif [[ ${CASE} -eq 3 ]]; then
 	HETERO=true
 	NUM_GPUS=8
@@ -55,7 +52,6 @@ elif [[ ${CASE} -eq 3 ]]; then
 	LAYERS_NUM_LIST="[[2],[2],[2],[2]]"
 	UNUSED_RANK="[1,3]"
 	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:7,3:6,4:4,5:5,6:3,7:2}"
-	RECOMPUTE_LAYERS="[[],[1],[1],[1]]"
 else
     echo unknown CASE
 	exit 1
@@ -91,8 +87,7 @@ python -m hetu.models.llama.generate_llama_4d_config \
 	--cp $CP \
 	--tp $TP \
 	--pp $PP \
-	--zero \
-	--recompute_layers $RECOMPUTE_LAYERS
+	--zero 
 
 CMD="python3 -u train_hetu_packing.py \
 --num_strategy=1 \
@@ -135,7 +130,6 @@ python -m hetu.models.llama.generate_llama_hetero_4d_config \
 	--hetero_layers $LAYERS_NUM_LIST \
 	--rank_to_device_mapping $RANK_TO_DEVICE_MAPPING \
 	--unused_rank $UNUSED_RANK \
-	--recompute_layers $RECOMPUTE_LAYERS \
 	--file_name "hetero_config.json"
 
 CMD="python3 -u train_hetu_packing.py \

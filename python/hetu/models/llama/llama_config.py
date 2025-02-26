@@ -9,6 +9,7 @@ class LLaMAConfig(object):
         n_layer=12,
         n_head=12,
         n_inner=None,
+        n_query_groups=-1,
         activation_function="relu",
         resid_pdrop=0.1,
         embd_pdrop=0.1,
@@ -57,6 +58,10 @@ class LLaMAConfig(object):
             self.ffn_hidden_size = 4 * self.n_embd
         else:
             self.ffn_hidden_size = ffn_hidden_size
+        if n_query_groups == -1:
+            self.num_query_groups = self.n_head
+        else:
+            self.num_query_groups = n_query_groups
         self.num_attention_heads = self.n_head
         self.num_hidden_layers = self.n_layer
         self.add_cross_attention = False

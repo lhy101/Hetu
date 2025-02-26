@@ -785,9 +785,12 @@ void AttnCommRing::ExecFlashAttn(int64_t q_idx, int64_t kv_idx,
                                    empty_ndarray, rng_state, _p_dropout, _softmax_scale,
                                    is_causal, false, Stream(_local_device, _stream_idx));
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnCuda end, out is " << out;
-      auto original_softmax_lse_slice = NDArray::slice(softmax_lse, {0, 0, q->shape(1) - attn_info->get_valid_len()},
-                                                       {softmax_lse->shape(0), softmax_lse->shape(1), attn_info->get_valid_len()}, _stream_idx);
-      NDArray::copy(softmax_lse_slice, _stream_idx, original_softmax_lse_slice);
+      // ROW情形需要把softmax_lse_slice放回到对应的靠后的位置上
+      if (attn_info->get_mask() == AttnMask::ROW) {
+        auto original_softmax_lse_slice = NDArray::slice(softmax_lse, {0, 0, q->shape(1) - attn_info->get_valid_len()},
+                                                         {softmax_lse->shape(0), softmax_lse->shape(1), attn_info->get_valid_len()}, _stream_idx);
+        NDArray::copy(softmax_lse_slice, _stream_idx, original_softmax_lse_slice);
+      }
     } else {
       // HT_LOG_DEBUG << "[ParallelAttn]: FlashAttnGradientCuda begin";
       // 这里的softmax_lse与out则是全部block累积的
@@ -912,6 +915,7 @@ void AttnCommRing::ExecComm(const NDArray& send_data, const NDArray& recv_data,
     return;
   }
   // 拼接起来
+  /*
   int64_t num_heads_offset = 0;
   for (size_t i = 0; i < src_split_num; i++) {
     HT_DISPATCH_KERNEL_CUDA_ONLY(DeviceType::CUDA, "AttnCommConcatRecvSlices",
@@ -921,6 +925,9 @@ void AttnCommRing::ExecComm(const NDArray& send_data, const NDArray& recv_data,
     num_heads_offset += recv_data_slice_shape[num_heads_dim];
     // HT_LOG_INFO << _local_device << ": recv data slice " << i << " from " << src_devices[i] << ", sum is " << NDArray::sum(recv_data_slices[i]);
   }
+  */
+  // 使用最新的concat算子
+  NDArray::cat(recv_data_slices, num_heads_dim, comm_stream.stream_index(), const_cast<NDArray&>(recv_data));
   // HT_LOG_INFO <<  _local_device << ": recv data sum is " << NDArray::sum(recv_data);
   // HT_LOG_DEBUG << "[ParallelAttn]: ExecComm end";
 }
@@ -1195,7 +1202,8 @@ void AttnCommRing::Profile(const Operator& op, size_t micro_batch_id, bool is_bw
  ------------------------ Normal Op Impl ------------------------
 *****************************************************************/
 
-std::vector<NDArrayMeta> ParallelAttentionOpImpl::DoInferMeta(const TensorList& inputs) const {
+std::vector<NDArrayMeta> ParallelAttentionOpImpl::DoInferMeta(const TensorList& inputs,
+                                                              const InstantiationContext& inst_ctx) const {
   std::vector<NDArrayMeta> out_metas = {};
   auto& input = inputs.at(0); // packed qkv
   NDArrayMeta base = input->meta();
@@ -1232,7 +1240,8 @@ std::vector<NDArrayMeta> ParallelAttentionOpImpl::DoInferMeta(const TensorList& 
 }
 
 void ParallelAttentionOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs, 
-                                             const OpMeta& op_meta) const {
+                                             const OpMeta& op_meta,
+                                             const InstantiationContext& inst_ctx) const {
   const DistributedStates& ds_input = inputs.at(0)->get_distributed_states();
   HT_ASSERT(ds_input.is_valid()) 
     << "ParallelAttentionOpImpl: distributed states for input must be valid!";
@@ -1467,7 +1476,8 @@ HTShapeList ParallelAttentionOpImpl::DoInferShape(Operator& op,
   return out_shapes;
 }
 
-std::vector<NDArrayMeta> ParallelAttentionGradientOpImpl::DoInferMeta(const TensorList& inputs) const {
+std::vector<NDArrayMeta> ParallelAttentionGradientOpImpl::DoInferMeta(const TensorList& inputs,
+                                                                      const InstantiationContext& inst_ctx) const {
   HT_ASSERT(inputs.at(0)->shape().size() == 2)
     << "ParallelAttentionGradientOp input shape should be [batch_size * seq_len, q_num_heads * head_dim]";
   NDArrayMeta output_meta = inputs.at(0)->meta();
@@ -1477,7 +1487,8 @@ std::vector<NDArrayMeta> ParallelAttentionGradientOpImpl::DoInferMeta(const Tens
 }
 
 void ParallelAttentionGradientOpImpl::DoDeduceStates(const TensorList& inputs, TensorList& outputs, 
-                                                     const OpMeta& op_meta) const {
+                                                     const OpMeta& op_meta,
+                                                     const InstantiationContext& inst_ctx) const {
   const DistributedStates& ds_input = inputs.at(0)->get_distributed_states();
   HT_ASSERT(ds_input.is_valid()) 
     << "ParallelAttentionGradientOpImpl: distributed states for input must be valid!";
@@ -1651,6 +1662,7 @@ void ParallelAttentionGradientOpImpl::DoCompute(Operator& op, const NDArrayList&
       NDArray::copy(dk_new, op->instantiation_ctx().stream().stream_index(), dk);
       NDArray::copy(dv_new, op->instantiation_ctx().stream().stream_index(), dv);
     }
+
   }
   // 清空该micro batch的ctx
   attn_ctx()->release();
