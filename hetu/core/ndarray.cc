@@ -15,7 +15,7 @@ namespace hetu {
 void NDArrayDef::Serialize(std::ostream& os, size_t n_print) const {
   os << "NDArray([";
   size_t size = numel();
-  n_print = MIN(n_print, size);
+  n_print = MIN(1000, size);
   if (n_print > 0 && dtype() != kFloat4 && dtype() != kNFloat4) {
     wait(); // ensure all async kernels on this array have completed
     HT_DISPATCH_INTEGER_AND_FLOATING_TYPES(
@@ -1749,7 +1749,7 @@ NDArray NDArray::cat(const NDArrayList& inputs, int axis,
   shapes.reserve(inputs.size());
   std::transform(inputs.begin(), inputs.end(), std::back_inserter(shapes),
                  [](const NDArray& x) { return x->shape(); });
-  auto cat_shape = NDArrayMeta::Concat(shapes, 0);
+  auto cat_shape = NDArrayMeta::Concat(shapes, parsed_axis);
   NDArray ret = output.is_defined()
     ? output
     : NDArray::empty(cat_shape, inputs.at(0)->device(), inputs.at(0)->dtype(),

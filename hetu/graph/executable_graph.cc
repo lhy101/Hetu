@@ -1601,9 +1601,11 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
             result.reserve(num_micro_batches);
             for (auto& tensor2data : tensor2data_list) {
               auto it = tensor2data.find(output->id());
-              HT_ASSERT (it != tensor2data.end()) << "Something wrong! Can't find the data to fetch.";
+              HT_ASSERT (it != tensor2data.end()) 
+                << "Something wrong! Can't find the data to fetch.";
               result.push_back(tensor2data[output->id()]);
             }
+            // HT_LOG_INFO << "concat results of " << output << " fot all micro-batches: " << result;
             results[it->second] = NDArray::cat(result);
           }
         }
@@ -1620,7 +1622,7 @@ NDArrayList ExecutableGraph::CrucialRun(const TensorList& fetches,
   
   // HT_LOG_DEBUG << local_device << ": sync ops = " << sync_ops;
   for (size_t i = 0; i < results.size(); i++)
-    HT_LOG_TRACE << "results[" << i << "]: " << results[i];
+    HT_LOG_TRACE << "fetch " << fetches.at(i) << " (" << i << "-th result): " << results[i];
   HT_LOG_DEBUG << local_device << ": 5. get results[end]";
 
   // ********************** Run Level Check Point **********************

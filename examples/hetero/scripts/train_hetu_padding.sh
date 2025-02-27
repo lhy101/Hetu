@@ -6,9 +6,9 @@ HIDDEN_SIZE=${2:-256}
 NUM_HEADS=${3:-32}
 # NUM_HEADS=${3:-2}
 # SEQ_LEN=${4:-1024}
-SEQ_LEN=${4:-128}
+SEQ_LEN=${4:-1024}
 GLOBAL_BATCH_SIZE=${5:-16}
-GLOBAL_BATCH_SIZE=${5:-2}
+GLOBAL_BATCH_SIZE=${5:-4}
 MICRO_BATCH_SIZE=${6:-1}
 FFN_HIDDEN_SIZE=${7:-11008}
 FFN_HIDDEN_SIZE=${7:-2752}
@@ -31,9 +31,9 @@ if [[ ${CASE} -eq 0 ]]; then
 elif [[ ${CASE} -eq 1 ]]; then
 	HETERO=false
 	NUM_GPUS=8
-	TP=4
+	TP=8
 	PP=1
-	DP=2
+	DP=1
 	CP=1
 elif [[ ${CASE} -eq 2 ]]; then
 	HETERO=true
@@ -45,7 +45,7 @@ elif [[ ${CASE} -eq 2 ]]; then
 	MICRO_BATCH_NUM_LIST="[1,1]"
 	UNUSED_RANK="[1,3]"
 	RANK_TO_DEVICE_MAPPING="{0:0,1:1,2:7,3:6,4:4,5:5,6:3,7:2}"
-	SEQ_LEN_LIST="[128, 4, 100, 14]"
+	SEQ_LEN_LIST="[128,4,100,14]"
 else
     echo unknown CASE
 	exit 1

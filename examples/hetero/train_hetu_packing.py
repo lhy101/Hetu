@@ -257,6 +257,7 @@ def pretrain(args):
             begin_seq_id = accumulate_seq_id[dp_group_id]
             end_seq_id = accumulate_seq_id[dp_group_id + 1]
             batch_indices = list(range(begin_seq_id, end_seq_id))
+            config.max_seqlen_symbol.set_data(sorted_len[batch_indices[-1]] - 1) 
             input_bucket, label_bucket = get_input_and_label_buckets(
                 sorted_batch, 
                 train_dataset.pad_id(), 

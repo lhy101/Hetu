@@ -135,6 +135,20 @@ def generate_recompute_config(
     recompute_num_layers = None, 
     recompute_layer_idxs_list = None
 ):
+    # recompute_method
+    if recompute_method is not None:
+        if type(recompute_method) == list:
+            if len(recompute_method) == 1:
+                recompute_method = [recompute_method[0] for _ in range(dcp_size)]
+            else:
+                assert len(recompute_method) == dcp_size, \
+                    f"recompute_method should have the same length as dcp, but got {len(recompute_method)} vs. {dcp_size}"
+        elif type(recompute_method) == str:
+            recompute_method = [recompute_method for _ in range(dcp_size)]
+        else:
+            raise ValueError(f"recompute_method should be a string or a list of strings, but got {recompute_method}")
+    else:
+        recompute_method = [None for _ in range(dcp_size)]
     # recompute_granularity
     if recompute_granularity is not None:
         if type(recompute_granularity) == list:
@@ -153,20 +167,6 @@ def generate_recompute_config(
         if granularity == 'selective':
             assert recompute_method[i] is None, \
                 f"recompute_method should be None for dcp {i} when recompute_granularity is 'selective'"
-    # recompute_method
-    if recompute_method is not None:
-        if type(recompute_method) == list:
-            if len(recompute_method) == 1:
-                recompute_method = [recompute_method[0] for _ in range(dcp_size)]
-            else:
-                assert len(recompute_method) == dcp_size, \
-                    f"recompute_method should have the same length as dcp, but got {len(recompute_method)} vs. {dcp_size}"
-        elif type(recompute_method) == str:
-            recompute_method = [recompute_method for _ in range(dcp_size)]
-        else:
-            raise ValueError(f"recompute_method should be a string or a list of strings, but got {recompute_method}")
-    else:
-        recompute_method = [None for _ in range(dcp_size)]
     # recompute_num_layers
     if recompute_num_layers is None:
         recompute_num_layers = [1 for _ in range(dcp_size)]
@@ -191,12 +191,12 @@ def generate_recompute_config(
                     f"recompute_layer_idxs_list should have the same length as dcp, but got {len(recompute_layer_idxs_list)} vs. {dcp_size}"
             for i, recompute_layer_idxs in enumerate(recompute_layer_idxs_list):
                 if len(recompute_layer_idxs) > 0:
-                    if recompute_method[i] is None:
+                    if recompute_method[i] is not None:
                         print(f"[WARNING] recompute_method will be ignored when recompute_layer_idxs is set for dcp {i}, got method {recompute_method[i]} and layer_idxs {recompute_layer_idxs}")
         elif type(recompute_layer_idxs_list) == int:
             recompute_layer_idxs_list = [[recompute_layer_idxs_list] for _ in range(dcp_size)]
         else:
-            raise ValueError(f"recompute_layer_idxs_list should be an integer or a list of integers, but got {recompute_layer_idxs_list}")
+            raise ValueError(f"recompute_layer_idxs_list should be an integer or a list of integers, but got {type(recompute_layer_idxs_list)}: {recompute_layer_idxs_list}")
     else:
         recompute_layer_idxs_list = [[] for _ in range(dcp_size)]
     # blocks_recompute & blocks_output_recompute

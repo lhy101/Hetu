@@ -167,7 +167,7 @@ if __name__ == '__main__':
         '--dp', type=int, default=2, help='dp.'
     )
     parser.add_argument(
-        '--cp_list', type=str, default="", help='cp list.'
+        '--cp_list', type=str, default="null", help='cp list.'
     )
     parser.add_argument(
         '--tp', type=int, default=2, help='tp.'
@@ -176,32 +176,32 @@ if __name__ == '__main__':
         '--hetero_layers', type=str, help='heterogenous layers list.'
     )
     parser.add_argument(
-        '--rank_to_device_mapping', type=str, default="", help='device to rank mapping.'
+        '--rank_to_device_mapping', type=str, default="null", help='device to rank mapping.'
     )
     parser.add_argument(
-        '--unused_rank', type=str, default="[]", help='unused rank list.'
+        '--unused_rank', type=str, default="null", help='unused rank list.'
     )
     parser.add_argument(
         '--zero', action='store_true', help='use zero or not.'
     )
     parser.add_argument(
-        '--recompute_granularity', type=str, default="", help='recompute granularity: List["selevctive" or "full"].'
+        '--recompute_granularity', type=str, default="null", help='recompute granularity: List["selevctive" or "full"].'
     )
     parser.add_argument(
-        '--recompute_method', type=str, default="", help='recompute method: List["uniform" or "block"].'
+        '--recompute_method', type=str, default="null", help='recompute method: List["uniform" or "block"].'
     )
     parser.add_argument(
-        '--recompute_num_layers', type=str, default="", help='recompute num layers: List[int].'
+        '--recompute_num_layers', type=str, default="null", help='recompute num layers: List[int].'
     )
     parser.add_argument(
-        '--recompute_layer_idxs_list', type=str, default="", help='recompute layer idxs list: List[List[int]].'
+        '--recompute_layer_idxs_list', type=str, default="null", help='recompute layer idxs list: List[List[int]].'
     )
     parser.add_argument(
         '--file_name', type=str, default="", help="file path to save."
     )
     args = parser.parse_args()
     
-    if args.cp_list == "":
+    if args.cp_list == "null":
         cp_list = [1 for _ in range(args.dp)]
     else:
         cp_list = ast.literal_eval(args.cp_list)
@@ -215,17 +215,22 @@ if __name__ == '__main__':
         assert sum(pipeline) == num_layers, "sum of heterogenous layers of a single pipeline should be equal to the num of total layers"
         accumulate_hetero_stages.append(accumulate_hetero_stages[-1] + len(pipeline))
      
-    if args.rank_to_device_mapping == "":
+    if args.rank_to_device_mapping == "null":
         rank_to_device_mapping = {}       
         for idx in range(args.num_gpus):
             rank_to_device_mapping[idx] = idx
     else:
         rank_to_device_mapping = ast.literal_eval(args.rank_to_device_mapping)
+        
+    if args.unused_rank== "null":
+        unused_rank = []
+    else:
+        unused_rank = ast.literal_eval(args.unused_rank)
      
     ds_parallel_config = generate_llama_hetero_4d_config(
         cp_list, 
         rank_to_device_mapping, 
-        ast.literal_eval(args.unused_rank), 
+        unused_rank, 
         hetero_layers, 
         accumulate_hetero_stages, 
         num_layers, 
@@ -233,10 +238,10 @@ if __name__ == '__main__':
         args.dp, 
         args.tp, 
         args.zero,
-        None if args.recompute_granularity == "" else ast.literal_eval(args.recompute_granularity), 
-        None if args.recompute_method == "" else ast.literal_eval(args.recompute_method), 
-        None if args.recompute_num_layers == "" else ast.literal_eval(args.recompute_num_layers), 
-        None if args.recompute_layer_idxs_list == "" else ast.literal_eval(args.recompute_layer_idxs_list)
+        None if args.recompute_granularity == "null" else ast.literal_eval(args.recompute_granularity), 
+        None if args.recompute_method == "null" else ast.literal_eval(args.recompute_method), 
+        None if args.recompute_num_layers == "null" else ast.literal_eval(args.recompute_num_layers), 
+        None if args.recompute_layer_idxs_list == "null" else ast.literal_eval(args.recompute_layer_idxs_list)
     )
     
     save_folder = './ds_parallel_config/llama_hetero'

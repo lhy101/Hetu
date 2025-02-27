@@ -1089,7 +1089,7 @@ NDArrayList ReduceScatterOpImpl::DoCompute(Operator& op,
     << "Data type mismatched for ReduceScatter communication: " << inputs.at(0)->dtype()
     << " vs. " << op->input(0)->dtype();
 
-  if (inplace()) {
+  if (inplace() && !ctx.has_runtime_allocation(op->output(0)->id())) {
     // just inplace here
     NDArrayMeta meta = inputs.at(0)->meta();
     HTShape scatter_shape = inputs.at(0)->shape();

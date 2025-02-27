@@ -377,7 +377,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       HT_RUNTIME_ERROR << "During deducing shape of exec op " << exec_op << " with inputs " << exec_op->inputs()
         << " and shapes " << input_shapes << ", an error occurs: " << e.what();
     }
-    HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
+    // HT_LOG_INFO << exec_op << " input shapes are " << input_shapes << " and output shapes are " << exec_output_shapes;
     auto exec_output_shapes_size = exec_output_shapes.size();
     for (size_t i = 0; i < exec_output_shapes_size; i++) {
       // 设置symbolic shape叶子节点的shape
@@ -434,7 +434,7 @@ void DefineAndRunGraph::DeduceShapePlan(ExecGraphPlan& exec_graph_plan,
       HT_RUNTIME_ERROR << "During deducing shape of additional exec op " << exec_op << " with inputs " << exec_op->inputs()
         << " and shapes " << exec_input_shapes << ", an error occurs: " << e.what();
     }
-    HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
+    // HT_LOG_INFO << "extra exec op " << exec_op << " output shapes are " << exec_output_shapes;
     /*
     if (is_batched_isend_irecv_op(exec_op) && exec_op->num_inputs() == 0) {
       HT_LOG_INFO << exec_op << " is no-send batched-isend-irecv op, the in dep linkers are " << exec_op->in_dep_linkers();

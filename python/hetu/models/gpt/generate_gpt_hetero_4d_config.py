@@ -2,20 +2,23 @@ import argparse
 import json
 import os
 import ast
+from hetu.utils.parallel import generate_recompute_config
 
-# TODO: support multi-recompute and multi-offload
 def generate_gpt_hetero_4d_config(
     cp_list, 
     rank_to_device_mapping, 
     unused_rank, 
     hetero_layers, 
     accumulate_hetero_stages, 
-    recompute_layers, 
     num_layers=32, 
     num_gpus=8, 
     dp=2, 
     tp=2, 
-    zero=True
+    zero=True,
+    recompute_granularity=None,
+    recompute_method=None,
+    recompute_num_layers=None,
+    recompute_layer_idxs_list=None
 ):
     
     if dp == 1:
@@ -46,10 +49,22 @@ def generate_gpt_hetero_4d_config(
             hybrid_device_group.append([rank_to_device_mapping[rank] for rank in ranks if rank not in unused_rank])
         tp_union_list.append(hybrid_tp_degree)
         dg_union_list.append(hybrid_device_group)
+        
+    recompute_config = generate_recompute_config(
+        dp_cp,
+        num_layers,
+        hetero_layers,
+        recompute_granularity=recompute_granularity,
+        recompute_method=recompute_method,
+        recompute_num_layers=recompute_num_layers,
+        recompute_layer_idxs_list=recompute_layer_idxs_list
+    )
 
     ds_parallel_config = {
         'zero': zero,
         'devices': list(range(num_gpus)),
+        'recompute_granularity': recompute_config.recompute_granularity,
+        'recompute_layer_idxs_list': recompute_config.recompute_layer_idxs_list,
         'input': {
             'split': {'0': dp_cp_union},
             'dup': tp_union_list[0],
@@ -60,12 +75,6 @@ def generate_gpt_hetero_4d_config(
             'wte': {
                 'split': {'0': tp_union_list[0]},
                 'dup': dp_cp_union,
-                'device_group_union': dg_union_list[0],
-                'type': 'variable'
-            },
-            'wpe': {
-                'split': {},
-                'dup': [tp_union_list[0][i] * dp_cp for i in range(dp_cp)],
                 'device_group_union': dg_union_list[0],
                 'type': 'variable'
             },
@@ -97,7 +106,9 @@ def generate_gpt_hetero_4d_config(
         blocks_json = ds_parallel_config['gpt']['blocks']
         blocks_json[f'blocks{block_id}'] = {
             'range': [block_id,],
-            'recompute': [(True if block_id in recompute_layers[i] else False) for i in range(dp_cp)],
+            'recompute': recompute_config.blocks_recompute[block_id],
+            'output_recompute': recompute_config.blocks_output_recompute[block_id],
+            'cpu_offload': [False for _ in range(dp_cp)],
             'layernorm1': {
                 'split': {'0': tp_union_list[block_id]},
                 'dup': dp_cp_union,
@@ -154,7 +165,7 @@ if __name__ == '__main__':
         '--dp', type=int, default=2, help='dp.'
     )
     parser.add_argument(
-        '--cp_list', type=str, default="", help='cp list.'
+        '--cp_list', type=str, default="null", help='cp list.'
     )
     parser.add_argument(
         '--tp', type=int, default=2, help='tp.'
@@ -163,23 +174,32 @@ if __name__ == '__main__':
         '--hetero_layers', type=str, help='heterogenous layers list.'
     )
     parser.add_argument(
-        '--rank_to_device_mapping', type=str, default="", help='device to rank mapping.'
+        '--rank_to_device_mapping', type=str, default="null", help='device to rank mapping.'
     )
     parser.add_argument(
-        '--unused_rank', type=str, default="[]", help='unused rank list.'
+        '--unused_rank', type=str, default="null", help='unused rank list.'
     )
     parser.add_argument(
         '--zero', action='store_true', help='use zero or not.'
     )
     parser.add_argument(
-        '--recompute_layers', type=str, default="", help='layers to recompute.'
+        '--recompute_granularity', type=str, default="null", help='recompute granularity: List["selevctive" or "full"].'
+    )
+    parser.add_argument(
+        '--recompute_method', type=str, default="null", help='recompute method: List["uniform" or "block"].'
+    )
+    parser.add_argument(
+        '--recompute_num_layers', type=str, default="null", help='recompute num layers: List[int].'
+    )
+    parser.add_argument(
+        '--recompute_layer_idxs_list', type=str, default="null", help='recompute layer idxs list: List[List[int]].'
     )
     parser.add_argument(
         '--file_name', type=str, default="", help="file path to save."
     )
     args = parser.parse_args()
     
-    if args.cp_list == "":
+    if args.cp_list == "null":
         cp_list = [1 for _ in range(args.dp)]
     else:
         cp_list = ast.literal_eval(args.cp_list)
@@ -193,20 +213,34 @@ if __name__ == '__main__':
         assert sum(pipeline) == num_layers, "sum of heterogenous layers of a single pipeline should be equal to the num of total layers"
         accumulate_hetero_stages.append(accumulate_hetero_stages[-1] + len(pipeline))
      
-    if args.rank_to_device_mapping == "":
+    if args.rank_to_device_mapping == "null":
         rank_to_device_mapping = {}       
         for idx in range(args.num_gpus):
             rank_to_device_mapping[idx] = idx
     else:
         rank_to_device_mapping = ast.literal_eval(args.rank_to_device_mapping)
-     
-    if args.recompute_layers == "":   
-        recompute_layers = [[] for _ in range(sum(cp_list))]
-    else:
-        recompute_layers = ast.literal_eval(args.recompute_layers)
-        assert len(recompute_layers) == sum(cp_list), "recompute layers state should align to dcp num"  
         
-    ds_parallel_config = generate_gpt_hetero_4d_config(cp_list, rank_to_device_mapping, ast.literal_eval(args.unused_rank), hetero_layers, accumulate_hetero_stages, recompute_layers, num_layers, args.num_gpus, args.dp, args.tp, args.zero)
+    if args.unused_rank== "null":
+        unused_rank = []
+    else:
+        unused_rank = ast.literal_eval(args.unused_rank)
+     
+    ds_parallel_config = generate_gpt_hetero_4d_config(
+        cp_list, 
+        rank_to_device_mapping, 
+        unused_rank, 
+        hetero_layers, 
+        accumulate_hetero_stages, 
+        num_layers, 
+        args.num_gpus, 
+        args.dp, 
+        args.tp, 
+        args.zero,
+        None if args.recompute_granularity == "null" else ast.literal_eval(args.recompute_granularity), 
+        None if args.recompute_method == "null" else ast.literal_eval(args.recompute_method), 
+        None if args.recompute_num_layers == "null" else ast.literal_eval(args.recompute_num_layers), 
+        None if args.recompute_layer_idxs_list == "null" else ast.literal_eval(args.recompute_layer_idxs_list)
+    )
     
     save_folder = './ds_parallel_config/gpt_hetero'
     if args.file_name == "":

@@ -155,16 +155,16 @@ if __name__ == '__main__':
         '--zero', action='store_true', help='use zero or not.'
     )
     parser.add_argument(
-        '--recompute_granularity', type=str, default="", help='recompute granularity: "selevctive" or "full".'
+        '--recompute_granularity', type=str, default="null", help='recompute granularity: "selevctive" or "full".'
     )
     parser.add_argument(
-        '--recompute_method', type=str, default="", help='recompute method: "uniform" or "block".'
+        '--recompute_method', type=str, default="null", help='recompute method: "uniform" or "block".'
     )
     parser.add_argument(
-        '--recompute_num_layers', type=int, default=-1, help='recompute num layers: int.'
+        '--recompute_num_layers', type=str, default="null", help='recompute num layers: str(int).'
     )
     parser.add_argument(
-        '--recompute_layer_idxs', type=str, default="", help='recompute layer idxs: List[int].'
+        '--recompute_layer_idxs', type=str, default="null", help='recompute layer idxs: List[int].'
     )
 
     args = parser.parse_args()
@@ -181,10 +181,10 @@ if __name__ == '__main__':
         args.tp, 
         args.pp, 
         args.zero,
-        None if args.recompute_granularity == "" else args.recompute_granularity, 
-        None if args.recompute_method == "" else args.recompute_method, 
-        None if args.recompute_num_layers == -1 else args.recompute_num_layers, 
-        None if args.recompute_layer_idxs == "" else [ast.literal_eval(args.recompute_layer_idxs)]
+        None if args.recompute_granularity == "null" else args.recompute_granularity, 
+        None if args.recompute_method == "null" else args.recompute_method, 
+        None if args.recompute_num_layers == "null" else int(args.recompute_num_layers), 
+        None if args.recompute_layer_idxs == "null" else [ast.literal_eval(args.recompute_layer_idxs)]
     )
     
     save_folder = './ds_parallel_config/llama_homo'
