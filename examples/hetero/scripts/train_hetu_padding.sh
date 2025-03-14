@@ -1,17 +1,17 @@
 # NUM_LAYERS=${1:-32}
-NUM_LAYERS=${1:-2}
+NUM_LAYERS=${1:-4}
 HIDDEN_SIZE=${2:-4096}
-HIDDEN_SIZE=${2:-256}
+# HIDDEN_SIZE=${2:-256}
 # HIDDEN_SIZE=${2:-16}
 NUM_HEADS=${3:-32}
 # NUM_HEADS=${3:-2}
 # SEQ_LEN=${4:-1024}
-SEQ_LEN=${4:-1024}
+SEQ_LEN=${4:-32768}
 GLOBAL_BATCH_SIZE=${5:-16}
-GLOBAL_BATCH_SIZE=${5:-4}
+GLOBAL_BATCH_SIZE=${5:-1}
 MICRO_BATCH_SIZE=${6:-1}
 FFN_HIDDEN_SIZE=${7:-11008}
-FFN_HIDDEN_SIZE=${7:-2752}
+# FFN_HIDDEN_SIZE=${7:-2752}
 # FFN_HIDDEN_SIZE=${7:-16}
 SERVER_ADDR="${IP_1}"
 SERVER_ADDR="${IP_2}" # worker-0
@@ -20,7 +20,8 @@ SERVER_PORT=${8:-"23456"}
 HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
 ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 
-CASE=1
+TORCH_PROFILE=0
+CASE=0
 if [[ ${CASE} -eq 0 ]]; then
 	HETERO=false
 	NUM_GPUS=8
@@ -84,6 +85,7 @@ python -m hetu.models.llama.generate_llama_4d_config \
 	--zero 
 
 CMD="python3 -u train_hetu_padding.py \
+--torch_profile $TORCH_PROFILE \
 --num_strategy=1 \
 --ds_parallel_config ds_parallel_config/llama_homo/dp${DP}_cp${CP}_tp${TP}_pp${PP}.json \
 --global_batch_size $GLOBAL_BATCH_SIZE \
@@ -128,6 +130,7 @@ python -m hetu.models.llama.generate_llama_hetero_4d_config \
 	--file_name "hetero_config.json"
 
 CMD="python3 -u train_hetu_padding.py \
+--torch_profile $TORCH_PROFILE \
 --num_strategy=1 \
 --ds_parallel_config ds_parallel_config/llama_hetero/hetero_config.json \
 --global_batch_size $GLOBAL_BATCH_SIZE \

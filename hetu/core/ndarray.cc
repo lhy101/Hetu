@@ -15,7 +15,7 @@ namespace hetu {
 void NDArrayDef::Serialize(std::ostream& os, size_t n_print) const {
   os << "NDArray([";
   size_t size = numel();
-  n_print = MIN(1000, size);
+  n_print = MIN(n_print, size);
   if (n_print > 0 && dtype() != kFloat4 && dtype() != kNFloat4) {
     wait(); // ensure all async kernels on this array have completed
     HT_DISPATCH_INTEGER_AND_FLOATING_TYPES(
