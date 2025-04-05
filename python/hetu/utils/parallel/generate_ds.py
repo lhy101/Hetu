@@ -1,8 +1,10 @@
 import json
 import fcntl
 import os
+import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
+from pathlib import Path
 
 GPUS_PER_NODE = 8
 
@@ -364,3 +366,64 @@ def generate_ds_parallel_config(ngpus, layers_tp_groups, ds_parallel_config_path
     write_with_lock(ds_parallel_config_path, ds_parallel_config)
 '''
 
+def build_command_args(config, model):
+    """构建命令行参数列表"""
+    base_module = f"hetu.models.{model}.generate_{model}";
+    command_suffix = "hetero_4d_config" if config['hetero'] else "4d_config"
+    
+    args = [
+        'python', '-m', f"{base_module}_{command_suffix}",
+        '--num_layers', str(config['num_layers']),
+        '--num_gpus', str(config['num_gpus']),
+        '--dp', str(config['dp']),
+        '--tp', str(config['tp']),
+    ]
+
+    # 添加模式特定参数
+    if config['hetero']:
+        args.extend([
+            '--file_name', config['file_name'],
+            '--cp_list', json.dumps(config['cp_list'], separators=(',', ':')),
+            '--hetero_layers', json.dumps(config['layers_num_list'], separators=(',', ':')),
+            '--rank_to_device_mapping', '{' + ','.join(f"{k}:{v}" for k, v in config['rank_to_device_mapping'].items()) + '}',
+            '--unused_rank', json.dumps(config['unused_rank'], separators=(',', ':'))
+        ])
+    else:
+        args.extend([
+            '--cp', str(config['cp']),
+            '--pp', str(config['pp'])
+        ])
+
+    # 添加可选参数
+    if config.get('zero', False):
+        args.append('--zero')
+
+    return args
+
+def ensure_directory_exists(file_path: str) -> None:
+    """确保文件路径中的目录存在，不存在则创建"""
+    directory = os.path.dirname(file_path)
+    if directory:  # 当目录非空时创建
+        Path(directory).mkdir(parents=True, exist_ok=True)
+
+def generate_ds(strategy_config, model_name):
+    try:
+        ensure_directory_exists(strategy_config['file_name'])
+        args = build_command_args(strategy_config, model_name)
+        
+        print("Executing command:")
+        print(" ".join(args))
+        
+        result = subprocess.run(
+            args,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        print("Command output:", result.stdout)
+        print(f"✅ Successfully generated config: {strategy_config['file_name']}")
+        
+    except Exception as e:
+        print(f"❌ Error occurred: {str(e)}")
+        exit(1)

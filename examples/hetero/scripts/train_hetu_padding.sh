@@ -14,13 +14,13 @@ FFN_HIDDEN_SIZE=${7:-11008}
 # FFN_HIDDEN_SIZE=${7:-2752}
 # FFN_HIDDEN_SIZE=${7:-16}
 SERVER_ADDR="${IP_1}"
-SERVER_ADDR="${IP_2}" # worker-0
+# SERVER_ADDR="${IP_2}" # worker-0
 # SERVER_ADDR="127.0.0.1"
 SERVER_PORT=${8:-"23456"}
 HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
 ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 
-TORCH_PROFILE=0
+TORCH_PROFILE=1
 CASE=0
 if [[ ${CASE} -eq 0 ]]; then
 	HETERO=false

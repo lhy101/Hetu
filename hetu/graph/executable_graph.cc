@@ -2336,8 +2336,13 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
         } else if (_straggler_flag == 2) {
           ofstream_sync file(_straggler_log_file_path + "_" + std::to_string(hetu::impl::comm::GetWorldRank()) + ".txt", std::ios_base::app);
           if (file.is_open()) {
-            file << "total run time: " << COST_MSEC(crucial_run) << " ms" << std::endl;
-            file << "compute time: " << other_compute_time << " ms" << std::endl;
+            file << "total run time: " << COST_MSEC(crucial_run) << " ms, ";
+            file << "compute time: " << attn_fwd_time + attn_bwd_time + other_compute_time << " ms" << std::endl;
+            auto memory_info = GetCUDAProfiler(local_device)->GetCurrMemoryInfo();
+            file << "all reserved: " << memory_info.all_reserved << " mb, "
+              << "mempool reserved: " << memory_info.mempool_reserved << " mb, "
+              << "mempool peak reserved: " << memory_info.mempool_peak_reserved << " mb, "
+              << "mempool allocated: " << memory_info.mempool_allocated << " mb" << std::endl;
           } else {
             HT_RUNTIME_ERROR << "Error opening the file";
           }

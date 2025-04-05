@@ -242,13 +242,13 @@ if __name__ == '__main__':
         None if args.recompute_layer_idxs_list == "null" else ast.literal_eval(args.recompute_layer_idxs_list)
     )
     
-    save_folder = './ds_parallel_config/gpt_hetero'
     if args.file_name == "":
-        file_name = f'dcp{sum(cp_list)}_tp{args.tp}_pp{[len(pipeline) for pipeline in hetero_layers]}.json'
+        save_folder = './ds_parallel_config/gpt_hetero'
+        if not os.path.exists(save_folder):
+            os.makedirs(save_folder)
+        file_name = save_folder + f'dcp{sum(cp_list)}_tp{args.tp}_pp{[len(pipeline) for pipeline in hetero_layers]}.json'
     else:
         file_name = args.file_name
-    if not os.path.exists(save_folder):
-        os.makedirs(save_folder)
-    with open(f'{save_folder}/{file_name}', 'w') as f:
+    with open(f'{file_name}', 'w') as f:
         json.dump(ds_parallel_config, f, indent=4)
 
