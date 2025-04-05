@@ -12,9 +12,9 @@ for TP in "${TP_VALUES[@]}"; do
       continue
     fi
     # 定义 EXP_FILE 的路径
-    EXP_FILE="./experiments/H20/tp${TP}_pp${PP}/70b"
+    EXP_FILE="./experiments/H800/tp${TP}_pp${PP}/70b"
     # 调用现有脚本
-    bash scripts/profile.sh "$TP" "$PP" "$EXP_FILE"
+    bash scripts/profile_another.sh "$TP" "$PP" "$EXP_FILE"
   done
 done
 

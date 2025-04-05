@@ -1,15 +1,16 @@
 TP=${1:-2}
 PP=${2:-2}
-EXP_FILE=${3:-"./experiments/scale/tp2_pp2.txt"}
+EXP_DIR=${3:-"./experiments"}
 DP=${4:-1}
 
 NUM_LAYERS=60
 HIDDEN_SIZE=6656
 NUM_HEADS=64
-MICRO_BATCH_SIZE=1
-GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=17920
-# SERVER_ADDR="${IP_1}"
+
+MICRO_BATCH_SIZE=1
+GLOBAL_BATCH_SIZE=64
+SEQ_LEN=4096
 SERVER_ADDR="30.203.138.189"
 SERVER_PORT="23462"
 HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host0123.yaml"
@@ -49,38 +50,10 @@ python -m hetu.models.llama.generate_llama_4d_config \
 	--pp $PP \
 	--zero 
 
-EXP_DIR=$(dirname "$EXP_FILE")
 if [ ! -d "$EXP_DIR" ]; then
   mkdir -p "$EXP_DIR"
 fi
-if [ ! -e "$EXP_FILE" ]; then
-	> "$EXP_FILE"
-fi
 
-if (( TP == 8 && PP == 4 )); then
-	START_SEQ=1024
-elif (( TP == 8 && PP == 2 )); then
-	START_SEQ=1024
-else
-	START_SEQ=1024
-fi
-
-for i in $(seq ${START_SEQ} 1024 32768); do
-
-content=$(<"$EXP_FILE")
-length=${#content}
-# 检查倒数第二个字符是否是冒号
-if [[ "${content:length-2:1}" == ":" ]]; then
-	echo "run exp: already OOM"
-    break
-fi
-if [[ "${content:length-1:1}" == ":" ]]; then
-	echo "run exp: already OOM"
-    break
-fi
-echo "run exp: seq_len = ${i}"
-echo "seq len = ${i}:" >> "$EXP_FILE"
-SEQ_LEN=${i}
 CMD="python3 -u train_hetu_padding.py \
 --compute_only 1 \
 --torch_profile 0 \
@@ -111,24 +84,14 @@ CMD="python3 -u train_hetu_padding.py \
 --ngpus ${NUM_GPUS} \
 --cp_list \"${CP_LIST}\" \
 --gpus_per_stage ${TP} \
---exp_file ${EXP_FILE}"
+--exp_file ${EXP_DIR}/layers60 "
 
 source ${ENV_FILE_PATH}
-if [ ${NUM_GPUS} -gt 8 ]; then
-python3 ../../python/hetu/rpc/pssh_start_exp.py \
+python3 -m hetu.rpc.pssh_start \
 	--hosts ${HOST_FILE_PATH} \
 	--command "$CMD" \
 	--server_port ${SERVER_PORT} \
 	--ngpus ${NUM_GPUS} \
 	--envs ${ENV_FILE_PATH} \
 	--log_path ${LOG_FOLDER}
-else
-python3 ../../python/hetu/rpc/pssh_start_exp.py \
-	--command "$CMD" \
-	--server_port ${SERVER_PORT} \
-	--ngpus ${NUM_GPUS} \
-	--envs ${ENV_FILE_PATH} \
-	--log_path ${LOG_FOLDER}
-fi
 
-done

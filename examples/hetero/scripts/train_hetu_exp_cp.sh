@@ -1,7 +1,10 @@
 TP=${1:-2}
-PP=${2:-2}
+CP=${2:-2}
 EXP_FILE=${3:-"./experiments/scale/tp2_pp2.txt"}
 DP=${4:-1}
+PP=${5:-1}
+
+CP_LIST="[${CP}]"
 
 NUM_LAYERS=60
 HIDDEN_SIZE=6656
@@ -10,27 +13,17 @@ MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=17920
 # SERVER_ADDR="${IP_1}"
-SERVER_ADDR="30.203.138.189"
+SERVER_ADDR="30.203.137.113"
 SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host0123.yaml"
+HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host23.yaml"
 ENV_FILE_PATH="./scripts/env_H20.sh"
 
-NUM_GPUS=$(expr $TP \* $PP \* $DP)
-CP=1
-DCP=${DP}
-CP_LIST="["
-for ((i=1; i<=DP; i++)); do
-	if [ $i -ne 1 ]; then
-		CP_LIST="$CP_LIST,"
-	fi
-	CP_LIST="$CP_LIST$CP"
-done
-CP_LIST="$CP_LIST]"
+NUM_GPUS=$(expr $TP \* $CP \* $DP)
 RECOMPUTE_LAYERS="[]"
 
-echo run exp: tp=${TP}, pp=${PP}, num_gpus=${NUM_GPUS} 
+echo run exp: tp=${TP}, cp=${CP}, num_gpus=${NUM_GPUS} 
 # 请注意log编号目前并不等于rank编号
-LOG_FOLDER=logs/exp_tp${TP}_pp${PP}
+LOG_FOLDER=logs/exp_tp${TP}_cp${CP}
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 

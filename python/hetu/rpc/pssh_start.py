@@ -63,6 +63,8 @@ def pssh(args):
         output = client.run_command(cmd)
         clients.append(client)
         outputs.append(output)
+        # workaround: in some cases must ensure ranks are in order
+        time.sleep(0.1)
     for client in clients:
         client.join() 
     for output in outputs:
@@ -107,6 +109,6 @@ if __name__ == '__main__':
     # workaround: clients may start earlier than the server
     # need to use retry-until-connect approach
     # now simply wait 3 seconds to ensure the server is lauched before clients
-    time.sleep(3)
+    time.sleep(10)
     pssh(args)
     p.join()

@@ -106,6 +106,12 @@ if __name__ == '__main__':
         "--command", type=str, default='uname', help="command for pssh"
     )
     parser.add_argument(
+        "--server_addr", type=str, default='127.0.0.1', help="server's address"
+    )
+    parser.add_argument(
+        "--server_port", type=str, default='23457', help="server's port"
+    )
+    parser.add_argument(
         "--ngpus", type=int, default=8, help="num gpus"
     )
     parser.add_argument(
@@ -123,6 +129,7 @@ if __name__ == '__main__':
     message_queue = multiprocessing.Queue() 
     p = multiprocessing.Process(target=server_launch, args=(args.server_port, message_queue))
     p.start()
+    time.sleep(10)
     pssh(args)
     # currently heartbeat may exist but training may get stuck
     # we need to inform the server manually if clients are all terminated
