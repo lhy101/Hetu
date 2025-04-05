@@ -94,4 +94,3 @@ python3 -m hetu.rpc.pssh_start \
 	--ngpus ${NUM_GPUS} \
 	--envs ${ENV_FILE_PATH} \
 	--log_path ${LOG_FOLDER}
-

@@ -261,7 +261,7 @@ class ParamBuffer {
 class ParamBuckets {
   public:
     ParamBuckets(const std::string& name = {},
-                 size_t buckets_size = 10):
+                 size_t buckets_size = 1):
       _name(name),
       _buckets_size(buckets_size) {
       for (size_t i = 0; i <= _buckets_size; i++) {
@@ -575,6 +575,18 @@ class SwitchExecGraph {
           HT_RUNTIME_ERROR << "NotImplementedError";
         }
       }
+      char* buffer_env = std::getenv("HETU_SWITCH_BUFFER");
+      if (buffer_env != nullptr) {
+        std::string use_comm_buffer = buffer_env;
+        std::transform(use_comm_buffer.begin(), use_comm_buffer.end(), use_comm_buffer.begin(), ::toupper);
+        if (use_comm_buffer == "TRUE") {
+          _use_comm_buffer = true;
+        } else if (use_comm_buffer == "FALSE") {
+          _use_comm_buffer = false;
+        } else {
+          HT_RUNTIME_ERROR << "NotImplementedError";
+        }
+      }
     }
 
     void RecordTensorInfo(const Tensor& tensor, const std::string& info) {
@@ -663,6 +675,7 @@ class SwitchExecGraph {
 
     // comm plan related
     SWITCH_ALGORITHM_LEVEL _algorithm_level = SWITCH_ALGORITHM_LEVEL::NEW_GREEDY; // 采用的算法
+    bool _use_comm_buffer = true; // 是否使用合并的发送接收buffer
     DevicePair2Val _p2p_val_mapping; // deprecated: 记录了每两个device之间的p2p通信通路的总value（目前value是指次数）
     // 同一个device的intra和inter的通信可以overlap
     Device2Val _intra_device_val_mapping; // 记录intra node的device通信的value（目前value指发送数据的量除以带宽）（**热切换场景下接收数据的量固定）

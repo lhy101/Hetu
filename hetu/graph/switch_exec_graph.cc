@@ -329,7 +329,7 @@ void ParamSlice::AddOwnedSliceInst(const Device& device, const Tensor& tensor) {
   }
   _owned_devices.push_back(device);
   _owned_slice_instances.push_back(tensor);
-  _switcher->RecordTensorInfo(tensor, name());
+  _switcher->RecordTensorInfo(tensor, name() + "(numel=" + std::to_string(tensor->numel()) + ")");
 }
 
 void ParamSlice::AddNeededSliceInst(const Device& device, const Tensor& tensor) {
@@ -348,7 +348,7 @@ void ParamSlice::AddNeededSliceInst(const Device& device, const Tensor& tensor) 
   }
   _needed_devices.push_back(device);
   _needed_slice_instances.push_back(tensor);
-  _switcher->RecordTensorInfo(tensor, name());
+  _switcher->RecordTensorInfo(tensor, name() + "(numel=" + std::to_string(tensor->numel()) + ")");
 }
 
 // TODO: 修改greedy算法
@@ -1245,7 +1245,7 @@ void SwitchExecGraph::MakeCommGraph(SWITCH_MODE switch_mode, SWITCH_LEVEL switch
     auto it = _info_mapping.find(old_tensor->id());
     HT_ASSERT(it != _info_mapping.end())
       << "the info of the old tensor is not recorded";
-    RecordTensorInfo(new_tensor, it->second);
+    RecordTensorInfo(new_tensor, it->second +  + "(numel=" + std::to_string(new_tensor->numel()) + ")");
     auto& consumer = old_tensor->consumer(0);
     for (size_t j = 0; j < consumer->num_inputs(); ++j) {
       if (consumer->input(j)->id() == old_tensor->id()) {
@@ -1716,8 +1716,10 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
     // 特殊处理2
     // 使用聚合的buffer进行通信
     if (is_batched_isend_irecv_op(op)) {
-      BufferBatchedIsendIrecv(op, comm_nccl_group, tensor2data, tensor2degrees, comp_stream_idx);
-      continue;
+      if (_use_comm_buffer) {
+        BufferBatchedIsendIrecv(op, comm_nccl_group, tensor2data, tensor2degrees, comp_stream_idx);
+        continue;
+      }
     }
     // 特殊处理3
     // 分配after graph的param的runtime allocation（_concat_buffer)
@@ -1739,8 +1741,10 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
     }
     // 其余情况都是一些inplace的op
     else {
-      HT_ASSERT(is_slice_op(op) || (is_concat_op(op) && op->num_inputs() == 1))
-        << op << " with inputs " << op->inputs() << " doesn't have pre-allocated concat buffer";
+      if (_use_comm_buffer) {
+        HT_ASSERT(is_slice_op(op) || (is_concat_op(op) && op->num_inputs() == 1))
+          << op << " with inputs " << op->inputs() << " doesn't have pre-allocated concat buffer";
+      }
     }
     // 正常按照算子的逻辑进行处理
     NDArrayList input_vals;
@@ -1830,11 +1834,13 @@ void SwitchExecGraph::SwitchParams(SWITCH_MODE switch_mode,
   tensor2data.clear();
   // 清空recv的buffer
   // TODO: 按bucket发送并及时清除（虽然会提高延时，但能降低显存）
-  for (auto& kv : _recv_buffers) {
-    auto& recv_buffer = kv.second;
-    HT_ASSERT(recv_buffer->IsAllocated())
-      << "recv buffer should be allocated";
-    recv_buffer->Free();
+  if (_use_comm_buffer) {
+    for (auto& kv : _recv_buffers) {
+      auto& recv_buffer = kv.second;
+      HT_ASSERT(recv_buffer->IsAllocated())
+        << "recv buffer should be allocated";
+      recv_buffer->Free();
+    }
   }
   // 清空concat的buffer
   // 让_concat_buffer的storage的所有权转交给after param buffer和_preserved_data
@@ -2001,7 +2007,7 @@ void SwitchExecGraph::ProfileRunningDetails() {
   for (const auto& kv : send_info_mapping) {
     send_info_output << "send " << kv.second.size()
       << " tensor to " << kv.first;
-    if (_profile_level == SWITCH_PROFILE_LEVEL::TRACE) {
+    if (_profile_level == SWITCH_PROFILE_LEVEL::TIME) {
       for (const auto& send_info : kv.second) {
         send_info_output << ", " << send_info;
       }
@@ -2011,7 +2017,7 @@ void SwitchExecGraph::ProfileRunningDetails() {
   for (const auto& kv : recv_info_mapping) {
     recv_info_output << "recv " << kv.second.size()
       << " tensor from " << kv.first;
-    if (_profile_level == SWITCH_PROFILE_LEVEL::TRACE) {
+    if (_profile_level == SWITCH_PROFILE_LEVEL::TIME) {
       for (const auto& recv_info : kv.second) {
         recv_info_output << ", " << recv_info;
       }

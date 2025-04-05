@@ -18,7 +18,7 @@ def generate_gpt_4d_config(
     recompute_layer_idxs_list=None
 ):
     
-    if dp == 1:
+    if dp * cp == 1:
         zero = False
     num_layers_per_stage = num_layers // pp
     num_devices_per_stage = num_gpus // pp

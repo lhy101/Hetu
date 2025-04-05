@@ -1334,7 +1334,11 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
   DeviceGroupList tp_group_list;
   std::vector<int64_t> seq_len_list;
   std::tie(ring_idx, tp_group_list, seq_len_list) = get_local_ring(op->input(0), _multi_seq_lens_symbol, _multi_cp_group_symbol);
+<<<<<<< HEAD
   // HT_LOG_INFO << "[ParallelAttn]: the tp group list is " << tp_group_list << " and seq len list is " << seq_len_list;
+=======
+  HT_LOG_DEBUG << "[ParallelAttn]: the tp group list is " << tp_group_list << " and seq len list is " << seq_len_list;
+>>>>>>> main
   
   // 实际运行
   // 开cp
