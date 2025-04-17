@@ -1,5 +1,5 @@
-TP_VALUES=(2 4 8 16)
-PP_VALUES=(1 2 4)
+TP_VALUES=(8)
+PP_VALUES=(2)
 
 # 循环 TP 和 PP 的值
 for TP in "${TP_VALUES[@]}"; do
@@ -14,7 +14,7 @@ for TP in "${TP_VALUES[@]}"; do
     # 定义 EXP_FILE 的路径
     EXP_FILE="./experiments/hydraulis/tp${TP}_pp${PP}"
     # 调用现有脚本
-    bash scripts/train_hetu_exp.sh "$TP" "$PP" "$EXP_FILE"
+    bash scripts/train_hetu_exp_another.sh "$TP" "$PP" "$EXP_FILE"
   done
 done
 

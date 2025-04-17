@@ -24,7 +24,8 @@ using Device2DTListPairMap = std::unordered_map<Device, std::pair<std::vector<De
 std::ostream& operator<<(std::ostream& os, const SwitchExecGraph& switcher);
 
 enum class SWITCH_ALGORITHM_LEVEL : int8_t {
-  FCFS = 0,
+  MIN_IDX = 0,
+  FCFS,
   ROUND_ROBIN,
   MULTI_NODE_ROUND_ROBIN,
   GREEDY,
@@ -261,7 +262,7 @@ class ParamBuffer {
 class ParamBuckets {
   public:
     ParamBuckets(const std::string& name = {},
-                 size_t buckets_size = 1):
+                 size_t buckets_size = 4):
       _name(name),
       _buckets_size(buckets_size) {
       for (size_t i = 0; i <= _buckets_size; i++) {
@@ -383,7 +384,7 @@ class ParamSlice {
 
     void AddNeededSliceInst(const Device& device, const Tensor& tensor);
 
-    void ParamSliceComm(Device2DTListPairMap& send_mapping, Device2DTListPairMap& recv_mapping);
+    void ParamSliceComm(Device2DTListPairMap& send_mapping, Device2DTListPairMap& recv_mapping, const std::vector<Device>& failure_devices);
 
   protected:
     TensorName _block_name;
@@ -451,7 +452,7 @@ class ParamBlock {
       return _param_slices[sum];
     }
 
-    void ParamBlockComm(Device2DTListPairMap& send_mapping, Device2DTListPairMap& recv_mapping);
+    void ParamBlockComm(Device2DTListPairMap& send_mapping, Device2DTListPairMap& recv_mapping, const std::vector<Device>& failure_devices);
 
   protected:
     std::vector<int32_t> _block_shape; // # of the abstract slices
@@ -553,6 +554,8 @@ class SwitchExecGraph {
           _algorithm_level = SWITCH_ALGORITHM_LEVEL::ROUND_ROBIN;
         } else if (algorithm_level == "FCFS") {
           _algorithm_level = SWITCH_ALGORITHM_LEVEL::FCFS;
+        } else if (algorithm_level == "MIN_IDX") {
+          _algorithm_level = SWITCH_ALGORITHM_LEVEL::MIN_IDX;
         } else {
           HT_RUNTIME_ERROR << "NotImplementedError";
         }

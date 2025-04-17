@@ -8,14 +8,14 @@ FFN_HIDDEN_SIZE=${7:-17920}
 # SERVER_ADDR="${IP_1}"
 SERVER_ADDR="30.203.138.189"
 SERVER_PORT=${9:-"23457"}
-HOST_FILE_PATH=${10:-"/jizhicfs/pinxuezhao/lhy/hostfiles/host012453.yaml"}
+HOST_FILE_PATH=${10:-"/jizhicfs/pinxuezhao/lhy/hostfiles/host0123.yaml"}
 ENV_FILE_PATH=${11:-"./scripts/env_H20.sh"}
 
-NUM_GPUS=40
-python generate_strategy_ds.py -p "./strategy" -m "llama"
+NUM_GPUS=32
+python generate_strategy_ds.py -p "./homo_strategy" -m "llama"
 
 # 请注意log编号目前并不等于rank编号
-LOG_FOLDER=logs/hot-switch
+LOG_FOLDER=logs/homo-hot-switch
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
@@ -27,8 +27,8 @@ MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
 CMD="python3 -u train_hetu_switch.py \
 --num_strategy=2 \
---ds_parallel_config ds_parallel_config/multi_strategy/strategy_3.json,ds_parallel_config/multi_strategy/strategy_4.json \
---strategy_config strategy/strategy_3.json,strategy/strategy_4.json \
+--ds_parallel_config ds_parallel_config/homo_multi_strategy/strategy_2.json,ds_parallel_config/homo_multi_strategy/strategy_3.json \
+--strategy_config homo_strategy/strategy_2.json,homo_strategy/strategy_3.json \
 --global_batch_size $GLOBAL_BATCH_SIZE \
 --micro_batch_size $MICRO_BATCH_SIZE \
 --global_seq_len $SEQ_LEN \

@@ -10,9 +10,9 @@ MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
 FFN_HIDDEN_SIZE=17920
 # SERVER_ADDR="${IP_1}"
-SERVER_ADDR="30.203.138.189"
-SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host0123.yaml"
+SERVER_ADDR="30.203.137.113"
+SERVER_PORT="23461"
+HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host23.yaml"
 ENV_FILE_PATH="./scripts/env_H20.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)
@@ -59,8 +59,8 @@ fi
 
 if (( TP == 8 && PP == 4 )); then
 	START_SEQ=1024
-elif (( TP == 16 && PP == 1 )); then
-	START_SEQ=16384
+elif (( TP == 8 && PP == 2 )); then
+	START_SEQ=6144
 else
 	START_SEQ=1024
 fi

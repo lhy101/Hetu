@@ -358,7 +358,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
     auto& op = op_ref.get();
     // each device only need to substitute local comm_ops
     if (is_comm_op(op) && op->placement_group().contains(local_device)) {
-      HT_LOG_DEBUG << local_device << "==============> substitute comm_op begin: " << op << "...";
+      // HT_LOG_INFO << local_device << "==============> substitute comm_op begin: " << op << "...";
       auto& comm_op = op;
       // 获取其所在的subgraph使得后续替换的op都出现在同样的subgraph中
       // 有如下几种可能
@@ -723,7 +723,7 @@ void ExecutableGraph::SubstituteCommOp(const OpRefList& topo_order) {
       pop_subgraph_ctx();
       pop_subgraph_op_type_ctx();
       DeleteExecOp(comm_op);
-      HT_LOG_DEBUG << local_device << "==============> substitute comm_op end: " << op << "...";
+      // HT_LOG_INFO << local_device << "==============> substitute comm_op end: " << op << "...";
     }
   }
 }
@@ -1694,9 +1694,9 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       */
      
       // instantiate ops
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] Instantiate begin...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] Instantiate begin...";
       Instantiate(fetches, local_device);
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] Instantiate end...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] Instantiate end...";
 
       /*
       // init instantiated topo
@@ -1728,24 +1728,24 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
       HT_LOG_DEBUG << local_device << ": global topo before substitute comm_op: " << topo_before_substitute_comm;
 
       // substitute comm_op
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] substitute comm_op begin...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] substitute comm_op begin...";
       Graph::push_graph_ctx(id()); // ensure the new ops created in execute_graph
       ncclGroupStart_safe();
       SubstituteCommOp(topo_before_substitute_comm);
       ncclGroupEnd_safe();
       Graph::pop_graph_ctx();
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] substitute comm_op end...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] substitute comm_op end...";
 
       // update topo with substituted comm_ops
       OpRefList topo_before_contiguous = Graph::TopoSort(fetches, num_ops(), is_op_computed);
       HT_LOG_DEBUG << local_device << ": global topo before add contiguous op: " << topo_before_contiguous;
 
       // insert contiguous ops
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] insert contiguous op begin...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] insert contiguous op begin...";
       Graph::push_graph_ctx(id()); // ensure the new ops created in execute_graph
       InsertContiguousOp(topo_before_contiguous);
       Graph::pop_graph_ctx();
-      HT_LOG_DEBUG << local_device << ": [Execution Plan] insert contiguous op end...";
+      HT_LOG_INFO << local_device << ": [Execution Plan] insert contiguous op end...";
       is_execute_plan_changed = true;
       break;
     }
@@ -2246,9 +2246,22 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
     double optimizer_time = 0;
     double other_compute_time = 0;
     double pp_p2p_time = 0;
+
     double tp_collective_time = 0;
+    double p_all_gather_time = 0;
+    double p_reduce_scatter_time = 0;
+
     double dp_param_gather_time = 0;
+    double o_split_all_gather_time = 0;
+    double o_all_gather_time = 0;
+    double o_bsr_time = 0;
+
     double dp_grad_reduce_time = 0;
+    double o_split_all_reduce_time = 0;
+    double o_all_reduce_time = 0;
+    double o_split_reduce_scatter_time = 0;
+    double o_reduce_scatter_time = 0;
+
     double blocking_time = 0;
     double other_time = 0;
     std::ostringstream out;
@@ -2280,14 +2293,32 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
           }
         } else if (op->stream_index() == kCollectiveStream) {
           tp_collective_time += op_time.second * 1.0 / 1e6;
+          if (is_all_gather_op(op)) 
+            p_all_gather_time += op_time.second * 1.0 / 1e6;
+          if (is_reduce_scatter_op(op))
+            p_reduce_scatter_time += op_time.second * 1.0 / 1e6;
         } else if (op->stream_index() == kBridgeStream) {
           auto subgraph = op->graph().GetSubGraph(op);
           HT_ASSERT(subgraph != nullptr)
             << "kBridgeStream should only be used in bridge subgraph";
           if (subgraph->subgraph_type() == SubGraphType::OPTIMIZE_COMPUTE_BRIDGE) {
             dp_param_gather_time += op_time.second * 1.0 / 1e6;
+            if (is_all_gather_op(op))
+              o_all_gather_time += op_time.second * 1.0 / 1e6;
+            if (is_split_all_gather_op(op))
+              o_split_all_gather_time += op_time.second * 1.0 / 1e6;
+            if (is_batched_isend_irecv_op(op))
+              o_bsr_time += op_time.second * 1.0 / 1e6;
           } else if (subgraph->subgraph_type() == SubGraphType::COMPUTE_OPTIMIZE_BRIDGE) {
             dp_grad_reduce_time += op_time.second * 1.0 / 1e6;
+            if (is_all_reduce_op(op))
+              o_all_reduce_time += op_time.second * 1.0 / 1e6;
+            if (is_split_all_reduce_op(op))
+              o_split_all_reduce_time += op_time.second * 1.0 / 1e6;
+            if (is_reduce_scatter_op(op))
+              o_reduce_scatter_time += op_time.second * 1.0 / 1e6;
+            if (is_split_reduce_scatter_op(op))
+              o_split_reduce_scatter_time += op_time.second * 1.0 / 1e6;
           }
         } else if (op->stream_index() == kBlockingStream) {
           blocking_time += op_time.second * 1.0 / 1e6;
@@ -2306,25 +2337,43 @@ NDArrayList ExecutableGraph::Run(const Tensor& loss, const TensorList& fetches,
                   << "attn bwd time: " << attn_bwd_time << " ms, "
                   << "optimizer time: " << optimizer_time << " ms, "
                   << "other compute time: " << other_compute_time << " ms, "
-                  << "tp collective time: " << tp_collective_time << " ms, "
+                  << "tp collective time: " << tp_collective_time << " ms ("
+                  << "all gather time: " << p_all_gather_time << " ms, "
+                  << "reduce scatter time: " << p_reduce_scatter_time << " ms), "
                   << "pp p2p time (include bubble): " << pp_p2p_time << " ms, "
-                  << "dp param gather time: " << dp_param_gather_time << " ms, "
-                  << "dp grad reduce time: " << dp_grad_reduce_time << " ms, "
+                  << "dp param gather time: " << dp_param_gather_time << " ms ("
+                  << "all gather time: " << o_all_gather_time << " ms, "
+                  << "split all gather time: " << o_split_all_gather_time << " ms, "
+                  << "bsr time: " << o_bsr_time << " ms), "
+                  << "dp grad reduce time: " << dp_grad_reduce_time << " ms ("
+                  << "all reduce time: " << o_all_reduce_time << " ms, "
+                  << "split all reduce time: " << o_split_all_reduce_time << " ms, "
+                  << "reduce scatter time: " << o_reduce_scatter_time << " ms, "
+                  << "split reduce scatter time: " << o_split_reduce_scatter_time << " ms), "
                   << "blocking time: " << blocking_time << " ms, "
                   << "other time: " << other_time << " ms" << std::endl
                   << out.str();
     }
     if (_straggler_flag) {
-      HT_LOG_WARN << local_device << ": " 
+      HT_LOG_WARN << local_device << ": "
                   << "\ntotal run time: " << COST_MSEC(crucial_run) << " ms, "
                   << "attn fwd time: " << attn_fwd_time << " ms, "
                   << "attn bwd time: " << attn_bwd_time << " ms, "
                   << "optimizer time: " << optimizer_time << " ms, "
                   << "other compute time: " << other_compute_time << " ms, "
-                  << "tp collective time: " << tp_collective_time << " ms, "
+                  << "tp collective time: " << tp_collective_time << " ms ("
+                  << "all gather time: " << p_all_gather_time << " ms, "
+                  << "reduce scatter time: " << p_reduce_scatter_time << " ms), "
                   << "pp p2p time (include bubble): " << pp_p2p_time << " ms, "
-                  << "dp param gather time: " << dp_param_gather_time << " ms, "
-                  << "dp grad reduce time: " << dp_grad_reduce_time << " ms, "
+                  << "dp param gather time: " << dp_param_gather_time << " ms ("
+                  << "all gather time: " << o_all_gather_time << " ms, "
+                  << "split all gather time: " << o_split_all_gather_time << " ms, "
+                  << "bsr time: " << o_bsr_time << " ms), "
+                  << "dp grad reduce time: " << dp_grad_reduce_time << " ms ("
+                  << "all reduce time: " << o_all_reduce_time << " ms, "
+                  << "split all reduce time: " << o_split_all_reduce_time << " ms, "
+                  << "reduce scatter time: " << o_reduce_scatter_time << " ms, "
+                  << "split reduce scatter time: " << o_split_reduce_scatter_time << " ms), "
                   << "blocking time: " << blocking_time << " ms, "
                   << "other time: " << other_time << " ms";
       if (_straggler_log_file_path != "") {

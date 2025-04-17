@@ -625,7 +625,10 @@ void DefineAndRunGraph::Instantiate(OpRefList&& global_topo,
   // HT_LOG_WARN << local_device << ": Deduce pipeline";
   if (_multi_pipeline_maps.find(COMPUTE_STRATEGY_ID) == _multi_pipeline_maps.end()) {
     _multi_pipeline_maps[COMPUTE_STRATEGY_ID] = Device2PipelineMap();
+    TIK(deduce_pipeline);
     DeducePipeline(COMPUTE_STRATEGY_ID, pipeline_num);
+    TOK(deduce_pipeline); 
+    HT_LOG_INFO << "deduce pipeline time = " << COST_MSEC(deduce_pipeline) << " ms";
   }
   exec_graph->SetPipeline(_multi_pipeline_maps[COMPUTE_STRATEGY_ID]);
   std::vector<int> used_ranks;
@@ -1340,6 +1343,7 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
   // 这里先将exec graph的topo运行出来
   // 包括substitute各种comm op以及修正各种mapping
   // 方便后面的热切换
+  TIK(build_exec_graph);
   if (exec_graph->NeedRank(hetu::impl::comm::DeviceToWorldRank(local_device))) {
     Graph::push_graph_ctx(exec_graph->id()); // 防止exec graph run内部MakeOp时忘记加
     exec_graph->Run(exec_loss, exec_fetches, 
@@ -1347,6 +1351,8 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
                     RunLevel::TOPO, grad_scale);
     Graph::pop_graph_ctx();
   }
+  TOK(build_exec_graph);
+  HT_LOG_INFO << "build exec graph time = " << COST_MSEC(build_exec_graph) << " ms";
 
   bool is_transfer_param_hot_switch = false;
   bool is_empty_cache = false;
@@ -1558,10 +1564,13 @@ NDArrayList DefineAndRunGraph::Run(const Tensor& loss, const TensorList& fetches
                 _param_and_opt_var_bucket_switcher_pool[key][dtype].emplace_back(std::make_shared<SwitchExecGraph>(this, _active_exec_plan, next_active_exec_plan, dtype, bucket_num, comm_set, std::unordered_map<DataType, DataType>{{DataType::FLOAT32, DataType::FLOAT32}}));
               }
             }
+            TIK(switch_buckets_time);
             // 实际bucket热切换
             for (int32_t bucket_num = 0; bucket_num < buckets_size; bucket_num++) {
               _param_and_opt_var_bucket_switcher_pool[key][dtype][bucket_num]->SwitchParams(param_switch_mode, param_switch_level, "switch params and opt-states dtype " + DataType2Str(dtype) + " bucket " + std::to_string(bucket_num));
             }
+            TOK(switch_buckets_time);
+            HT_LOG_INFO << "switch " << dtype << " buckets time = " << COST_MSEC(switch_buckets_time) << " ms";
           }
           // old version w/o dtype (Malleus exp only)
           /*

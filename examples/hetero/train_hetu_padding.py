@@ -63,6 +63,8 @@ def pretrain(args):
     assert ranges[0][0] == 0 and ranges[-1][-1] == config.num_hidden_layers - 1, \
         f'llama blocks range: {ranges} is conflict with num_hidden_layers: {config.num_hidden_layers}!'
 
+    build_user_graph_start = time.time()
+
     # Hetu model definition
     model = LLaMALMHeadModel(config=config, ds_parallel_configs=ds_parallel_configs)
 
@@ -105,6 +107,9 @@ def pretrain(args):
     train_op = opt.minimize(loss)
     print(f'{local_device}: optimizer minimize end...')
     
+    build_user_graph_end = time.time()
+    print(f'{local_device}: build user graph time cost = {build_user_graph_end - build_user_graph_start}')
+
     print(f'{local_device}: build dataset begin...')
     train_dataset = train_dataset_provider(args)
     print(f'{local_device}: build dataset end...')

@@ -304,8 +304,10 @@ def pretrain(args):
             begin_seq_id = accumulate_micro_batch_num[dp_group_id] * micro_batch_size
             end_seq_id = accumulate_micro_batch_num[dp_group_id + 1] * micro_batch_size
             assert end_seq_id - begin_seq_id == gbs_per_dp, "batch size mismatches"
+            print(f"{local_device}: inner_group_accumulate_seq_lens = {inner_group_accumulate_seq_lens}, inner_group_seq_idx = {inner_group_seq_idx}, accumulate_micro_batch_num = {accumulate_micro_batch_num}, dp_group_id = {dp_group_id}")
             labels = global_batch[begin_seq_id: end_seq_id, begin_seq_len + 1: begin_seq_len + seq_len + 1].reshape(-1) # [gbs_per_dp, seq_len]
             tokens = global_batch[begin_seq_id: end_seq_id, begin_seq_len: begin_seq_len + seq_len].reshape(-1) # [gbs_per_dp, seq_len]
+            print(f"{local_device}: global batch shape is {global_batch.shape}, input shape reshape from ({begin_seq_id} - {end_seq_id}) * ({begin_seq_len} - {begin_seq_len + seq_len}) to {tokens.shape}")
             feed_dict = {
                 input_ids: tokens.astype(np.int64),
                 loss_mask: np.ones_like(tokens, dtype=np.float32),
