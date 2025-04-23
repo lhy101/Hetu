@@ -579,7 +579,7 @@ void AttnCommRing::SaveCtx(const std::shared_ptr<AttnCtx>& attn_ctx) {
   attn_ctx->q = _local_q;
   // 注意k和v共有一个storage而q则单独有一个storage
   // 需要保证cur的storage上的通讯已经结束
-  // _final_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
+  _final_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
   attn_ctx->k = _final_kv_block->get_4d_k();
   attn_ctx->v = _final_kv_block->get_4d_v();
   attn_ctx->acc_out = _acc_out;
@@ -596,7 +596,7 @@ void AttnCommRing::SaveGradient(NDArray& local_dq, NDArray& local_dk, NDArray& l
     << "currently _acc_dq is local_dq (avoid another memory copy and consumption)";
   // 需要保证next的storage上的通讯已经结束
   // 因为它上面捎带了前一个（即cur）的acc的grad
-  // _final_next_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
+  _final_next_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
   NDArray::copy(_final_next_kv_block->get_4d_acc_dk(), _stream_idx, local_dk);
   NDArray::copy(_final_next_kv_block->get_4d_acc_dv(), _stream_idx, local_dv);
 }
@@ -991,8 +991,8 @@ void AttnCommRing::Run(bool is_bwd) {
   auto comm_stream = _nccl_comm_group->stream();
   auto comp_stream = Stream(_local_device, _stream_idx);
   auto tmp_event = std::make_unique<hetu::impl::CUDAEvent>(_local_device);
-  // tmp_event->Record(comp_stream);
-  // tmp_event->Block(comm_stream);
+  tmp_event->Record(comp_stream);
+  tmp_event->Block(comm_stream);
   int64_t q_idx = _ring_idx; 
   for (size_t round = 0; round < _ring_size; round++) {
     int64_t cur_kv_idx = (_ring_idx + _ring_size - round) % _ring_size;
@@ -1017,21 +1017,21 @@ void AttnCommRing::Run(bool is_bwd) {
     if (!is_bwd) {
       // HT_LOG_DEBUG << "[ParallelAttn]: run fwd round " << round << " begin";
       // 通信时的next_kv_block所在的storage必须已经完成了计算
-      // next_kv_block->wait_until_attn_done(comm_stream);
+      next_kv_block->wait_until_attn_done(comm_stream);
       {
         if (_need_profile) _comm_profile_start_event_list.at(round)->Record(comm_stream);
         ExecComm(cur_kv_block->get_4d_kv(), next_kv_block->get_4d_kv(), dst_devices, src_devices, comm_stream);
         if (_need_profile) _comm_profile_end_event_list.at(round)->Record(comm_stream);
       }
-      // next_kv_block->record_comm(comm_stream);
+      next_kv_block->record_comm(comm_stream);
       // 计算时当前的cur_kv_block所在的storage必须已经完成了通信
-      // if (!empty_round) cur_kv_block->wait_until_comm_done(comp_stream);
+      if (!empty_round) cur_kv_block->wait_until_comm_done(comp_stream);
       {
         if (_need_profile) _attn_profile_start_event_list.at(round)->Record(comp_stream);
         if (!empty_round) ExecFlashAttn(q_idx, cur_kv_idx, _local_q, cur_kv_block->get_4d_k(), cur_kv_block->get_4d_v(), _out, _softmax_lse, _rng_state_list.at(round));
         if (_need_profile) _attn_profile_end_event_list.at(round)->Record(comp_stream);
       }
-      // cur_kv_block->record_attn(comp_stream);
+      cur_kv_block->record_attn(comp_stream);
       {
         if (_need_profile) _corr_profile_start_event_list.at(round)->Record(comp_stream);
         // 如果当前block attn是空的
@@ -1055,8 +1055,8 @@ void AttnCommRing::Run(bool is_bwd) {
       // 且当前的cur_kv_block必须已经捎带上了梯度
       // 注意如果只有2个storage时第一个同步要求实际上被包含在第二个同步要求里
       // 但为了与fwd部分的代码保持一致因此这里这么写
-      // next_kv_block->wait_until_attn_done(comm_stream);
-      // cur_kv_block->wait_until_grad_done(comm_stream);
+      next_kv_block->wait_until_attn_done(comm_stream);
+      cur_kv_block->wait_until_grad_done(comm_stream);
       {
         HT_LOG_TRACE << _local_device << ": " << q_idx << "-th q and " << cur_kv_idx << "-th k(v) before comm: cur block acc_dk sum is " 
           << NDArray::sum(cur_kv_block->get_4d_acc_dk()) << ", cur block acc_dv sum is " << NDArray::sum(cur_kv_block->get_4d_acc_dv())
@@ -1077,7 +1077,7 @@ void AttnCommRing::Run(bool is_bwd) {
         }
         if (_need_profile) _comm_profile_end_event_list.at(round)->Record(comm_stream);
       }
-      // next_kv_block->record_comm(comm_stream);
+      next_kv_block->record_comm(comm_stream);
       // workaround: 分配临时的dq、dk以及dv
       // 理论上按照现在mempool的实现
       // dq恰好可以直接复用
@@ -1094,15 +1094,15 @@ void AttnCommRing::Run(bool is_bwd) {
         NDArray::full_(dv, 0, _stream_idx);
       }
       // 计算时当前的cur_kv_block所在的storage必须已经完成了通信
-      // if (!empty_round) cur_kv_block->wait_until_comm_done(comp_stream);
+      if (!empty_round) cur_kv_block->wait_until_comm_done(comp_stream);
       {
         if (_need_profile) _attn_profile_start_event_list.at(round)->Record(comp_stream);
         if (!empty_round) ExecFlashAttn(q_idx, cur_kv_idx, _local_q, cur_kv_block->get_4d_k(), cur_kv_block->get_4d_v(), _acc_out, _acc_softmax_lse, _rng_state_list.at(round), true, _grad_output, dq, dk, dv);
         if (_need_profile) _attn_profile_end_event_list.at(round)->Record(comp_stream);
       }
-      // cur_kv_block->record_attn(comp_stream);
+      cur_kv_block->record_attn(comp_stream);
       // 累积梯度时next_kv_block所在的storage必须也已经完成了通信
-      // if (!empty_round) next_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
+      if (!empty_round) next_kv_block->wait_until_comm_done(Stream(_local_device, _stream_idx));
       auto acc_dk = next_kv_block->get_4d_acc_dk();
       auto acc_dv = next_kv_block->get_4d_acc_dv();
       {
@@ -1121,7 +1121,7 @@ void AttnCommRing::Run(bool is_bwd) {
         }
         if (_need_profile) _grad_profile_end_event_list.at(round)->Record(comp_stream);
       }
-      // next_kv_block->record_grad(comp_stream);
+      next_kv_block->record_grad(comp_stream);
       // HT_LOG_DEBUG << "[ParallelAttn]: run bwd round " << round << " end";
     }
   }
@@ -1129,9 +1129,9 @@ void AttnCommRing::Run(bool is_bwd) {
   // Question: Megatron-CP并没有这一步
   // 应该是Megatron的实现有问题
   if (is_bwd) {
-    // _final_next_kv_block->wait_until_attn_done(comm_stream);
-    // _final_kv_block->wait_until_grad_done(comm_stream);
-    // ExecComm(_final_kv_block->get_4d_acc_dkv(), _final_next_kv_block->get_4d_acc_dkv(), dst_devices, src_devices, comm_stream);
+    _final_next_kv_block->wait_until_attn_done(comm_stream);
+    _final_kv_block->wait_until_grad_done(comm_stream);
+    ExecComm(_final_kv_block->get_4d_acc_dkv(), _final_next_kv_block->get_4d_acc_dkv(), dst_devices, src_devices, comm_stream);
   }
 }
 
@@ -1374,7 +1374,7 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
   // 不开cp
   else {
     // no ring-attn
-    // HT_LOG_INFO << "[ParallelAttn]: no fwd comm ring needed";
+    HT_LOG_DEBUG << "[ParallelAttn]: no fwd comm ring needed";
     attn_ctx()->rng_state_list = {NDArray::empty(HTShape{2},
                                                  Device(kCPU),
                                                  kInt64,
@@ -1391,13 +1391,11 @@ void ParallelAttentionOpImpl::DoCompute(Operator& op,
                                                    kFloat,
                                                    stream_idx);
       attn_ctx()->acc_out = reshaped_output;
-      // HT_LOG_INFO << "No packing attn begin";
       HT_DISPATCH_KERNEL_CUDA_ONLY(op->instantiation_ctx().placement.type(), type(), hetu::impl::FlashAttn,
                                    q, k, v, attn_ctx()->acc_out, q,
                                    k, v, attn_ctx()->acc_out, attn_ctx()->acc_softmax_lse,
                                    empty_ndarray, attn_ctx()->rng_state_list.at(0), p_dropout(), softmax_scale_,
                                    true, return_softmax(), op->instantiation_ctx().stream());
-      // HT_LOG_INFO << "No packing attn end";  
     } else {
       if (cu_seqlens_q->shape().size() == 2) {
         HT_ASSERT(cu_seqlens_q->shape(0) == 1)

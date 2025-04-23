@@ -11,7 +11,7 @@ NUM_HEADS=${3:-64}
 # SEQ_LEN=${4:-1024}
 SEQ_LEN=${4:-4096}
 # GLOBAL_BATCH_SIZE=${5:-16}
-GLOBAL_BATCH_SIZE=${5:-64}
+GLOBAL_BATCH_SIZE=${5:-4}
 MICRO_BATCH_SIZE=${6:-1}
 FFN_HIDDEN_SIZE=${7:-17904}
 FFN_HIDDEN_SIZE=${7:-17920}
@@ -26,8 +26,8 @@ HOST_FILE_PATH=${9:-"/jizhicfs/pinxuezhao/lhy/hostfiles/host012345.yaml"}
 ENV_FILE_PATH=${10:-"./scripts/env_H20.sh"}
 
 COMPUTE_ONLY=0
-TORCH_PROFILE=0
-CASE=14
+TORCH_PROFILE=1
+CASE=1
 if [[ ${CASE} -eq 0 ]]; then
 	HETERO=false
 	NUM_GPUS=16
@@ -37,11 +37,11 @@ if [[ ${CASE} -eq 0 ]]; then
 	CP=1
 elif [[ ${CASE} -eq 1 ]]; then
 	HETERO=false
-	NUM_GPUS=8
+	NUM_GPUS=16
 	TP=8
 	PP=1
 	DP=1
-	CP=1
+	CP=2
 elif [[ ${CASE} -eq 2 ]]; then
 # 32*H20+16*H800
 	HETERO=true

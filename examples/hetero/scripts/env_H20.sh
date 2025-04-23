@@ -28,7 +28,7 @@ export HETU_MAX_INTERNAL_FRAGMENT_SIZE_MB=20
 
 # Using multi-stream cuda event to watch time elaspe is inaccurate!
 # export HETU_PARALLEL_ATTN=ANALYSIS
-export HETU_PARALLEL_ATTN_SPLIT_PATTERN=NORMAL
+export HETU_PARALLEL_ATTN_SPLIT_PATTERN=SYM
 
 # 设置网络接口相关的环境变量
 export NCCL_SOCKET_IFNAME=bond1
