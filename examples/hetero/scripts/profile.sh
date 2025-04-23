@@ -6,14 +6,14 @@ DP=${4:-1}
 NUM_LAYERS=60
 HIDDEN_SIZE=6656
 NUM_HEADS=64
-FFN_HIDDEN_SIZE=11008
+FFN_HIDDEN_SIZE=17920
 
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=64
 SEQ_LEN=4096
-SERVER_ADDR="127.0.0.1" # 216
+SERVER_ADDR="${IP_1}"
 SERVER_PORT="23462"
-HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host01.yaml"
+HOST_FILE_PATH="/jizhicfs/pinxuezhao/lhy/hostfiles/host0123.yaml"
 ENV_FILE_PATH="./scripts/env_H20.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)
@@ -35,7 +35,7 @@ LOG_FOLDER=logs/exp_tp${TP}_pp${PP}
 mkdir -p ${LOG_FOLDER}
 echo logs will save to ${LOG_FOLDER}...
 
-ROOT_FOLDER=/jizhicfs/pinxuezhao/lhy/data
+ROOT_FOLDER=data
 JSON_FILE=${ROOT_FOLDER}/web/refinedweb0.json
 JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
@@ -55,7 +55,8 @@ if [ ! -d "$EXP_DIR" ]; then
 fi
 
 CMD="python3 -u train_hetu_padding.py \
---torch_profile $TORCH_PROFILE \
+--compute_only 1 \
+--torch_profile 0 \
 --num_strategy=1 \
 --ds_parallel_config ds_parallel_config/llama_homo/dp${DP}_cp${CP}_tp${TP}_pp${PP}.json \
 --global_batch_size $GLOBAL_BATCH_SIZE \
@@ -82,8 +83,8 @@ CMD="python3 -u train_hetu_padding.py \
 --server_port ${SERVER_PORT} \
 --ngpus ${NUM_GPUS} \
 --cp_list \"${CP_LIST}\" \
---gpus_per_stage ${TP}" \
---exp_file ${EXP_DIR}"
+--gpus_per_stage ${TP} \
+--exp_file ${EXP_DIR}/layers60 "
 
 source ${ENV_FILE_PATH}
 python3 -m hetu.rpc.pssh_start \

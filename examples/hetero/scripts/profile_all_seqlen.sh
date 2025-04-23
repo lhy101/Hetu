@@ -8,13 +8,11 @@ HIDDEN_SIZE=6656
 NUM_HEADS=64
 MICRO_BATCH_SIZE=1
 GLOBAL_BATCH_SIZE=16
-FFN_HIDDEN_SIZE=11008
-# SERVER_ADDR="${IP_1}"
-SERVER_ADDR="${IP_2}" # worker-0
-# SERVER_ADDR="127.0.0.1" # 216
-SERVER_PORT="23462"
+FFN_HIDDEN_SIZE=17920
+SERVER_ADDR="${IP_1}"
+SERVER_PORT="23333"
 HOST_FILE_PATH="./hostfiles/host0123.yaml"
-ENV_FILE_PATH="./scripts/env_A800.sh"
+ENV_FILE_PATH="./scripts/env_H20.sh"
 
 NUM_GPUS=$(expr $TP \* $PP \* $DP)
 CP=1
@@ -41,15 +39,14 @@ JSON_KEY=content
 VOCAB_FILE=${ROOT_FOLDER}/vocab.json
 MERGE_FILE=${ROOT_FOLDER}/merges.txt
 
-python -m hetu.models.gpt.generate_gpt_4d_config.py \
+python -m hetu.models.llama.generate_llama_4d_config \
 	--num_layers $NUM_LAYERS \
 	--num_gpus $NUM_GPUS \
 	--dp $DP \
 	--cp $CP \
 	--tp $TP \
 	--pp $PP \
-	--zero \
-	--recompute_layers $RECOMPUTE_LAYERS
+	--zero 
 
 EXP_DIR=$(dirname "$EXP_FILE")
 if [ ! -d "$EXP_DIR" ]; then
@@ -60,14 +57,14 @@ if [ ! -e "$EXP_FILE" ]; then
 fi
 
 if (( TP == 8 && PP == 4 )); then
-	START_SEQ=8448
-elif (( TP == 8 && PP == 2 )); then
-	START_SEQ=128
+	START_SEQ=1024
+elif (( TP == 16 && PP == 1 )); then
+	START_SEQ=16384
 else
-	START_SEQ=128
+	START_SEQ=1024
 fi
 
-for i in $(seq ${START_SEQ} 128 32768); do
+for i in $(seq ${START_SEQ} 1024 32768); do
 
 content=$(<"$EXP_FILE")
 length=${#content}
@@ -83,9 +80,11 @@ fi
 echo "run exp: seq_len = ${i}"
 echo "seq len = ${i}:" >> "$EXP_FILE"
 SEQ_LEN=${i}
-CMD="python3 -u train_hetu_exp.py \
+CMD="python3 -u train_hetu_padding.py \
+--compute_only 1 \
+--torch_profile 0 \
 --num_strategy=1 \
---ds_parallel_config ds_parallel_config/homo/dcp${DCP}_tp${TP}_pp${PP}.json \
+--ds_parallel_config ds_parallel_config/llama_homo/dp${DP}_cp${CP}_tp${TP}_pp${PP}.json \
 --global_batch_size $GLOBAL_BATCH_SIZE \
 --micro_batch_size $MICRO_BATCH_SIZE \
 --global_seq_len $SEQ_LEN \
@@ -93,7 +92,7 @@ CMD="python3 -u train_hetu_exp.py \
 --json_key $JSON_KEY \
 --vocab_file $VOCAB_FILE \
 --merge_file $MERGE_FILE \
---vocab_size 30592 \
+--vocab_size 50304 \
 --hidden_size $HIDDEN_SIZE \
 --ffn_hidden_size $FFN_HIDDEN_SIZE \
 --num_hidden_layers $NUM_LAYERS \
@@ -110,6 +109,7 @@ CMD="python3 -u train_hetu_exp.py \
 --server_port ${SERVER_PORT} \
 --ngpus ${NUM_GPUS} \
 --cp_list \"${CP_LIST}\" \
+--gpus_per_stage ${TP} \
 --exp_file ${EXP_FILE}"
 
 source ${ENV_FILE_PATH}

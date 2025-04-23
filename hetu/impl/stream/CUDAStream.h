@@ -49,14 +49,14 @@ void SynchronizeAllCUDAStreams(const Device& device = {});
 
 class CUDAEvent final : public Event {
  public:
+  // TODO: set enable_timing to false using env variable (otherwise no overlap)
   CUDAEvent(Device device, bool enable_timing = true)
   : Event(std::move(device), enable_timing) {
     HT_ASSERT(this->device().is_cuda())
       << "CUDAEvent should be used with CUDA devices. "
       << "Got " << this->device();
     hetu::cuda::CUDADeviceGuard guard(this->device().index());
-    CudaEventCreate(&_event,
-                    enable_timing ? cudaEventDefault : cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&_event, enable_timing ? cudaEventDefault : cudaEventDisableTiming);
   }
 
   ~CUDAEvent() {

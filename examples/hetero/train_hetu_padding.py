@@ -63,6 +63,8 @@ def pretrain(args):
     assert ranges[0][0] == 0 and ranges[-1][-1] == config.num_hidden_layers - 1, \
         f'llama blocks range: {ranges} is conflict with num_hidden_layers: {config.num_hidden_layers}!'
 
+    build_user_graph_start = time.time()
+
     # Hetu model definition
     model = LLaMALMHeadModel(config=config, ds_parallel_configs=ds_parallel_configs)
 
@@ -105,6 +107,9 @@ def pretrain(args):
     train_op = opt.minimize(loss)
     print(f'{local_device}: optimizer minimize end...')
     
+    build_user_graph_end = time.time()
+    print(f'{local_device}: build user graph time cost = {build_user_graph_end - build_user_graph_start}')
+
     print(f'{local_device}: build dataset begin...')
     train_dataset = train_dataset_provider(args)
     print(f'{local_device}: build dataset end...')
@@ -193,7 +198,7 @@ def pretrain(args):
         else:
             # ---- hetero tp ----
             rank_to_device_mapping = {}
-            if args.rank_to_device_mapping == "":
+            if args.rank_to_device_mapping == "" or args.rank_to_device_mapping == "null":
                 # 默认identity映射
                 for idx in range(all_devices.num_devices):
                     rank_to_device_mapping[idx] = idx
@@ -212,7 +217,7 @@ def pretrain(args):
                     curr_rank_id = rank_id
             assert curr_rank_id != -1, f"can't find device {all_devices.get_index(local_device)} in rank_to_device_mapping"
             # ---- hetero pipeline ----
-            if args.hetero_layers == "":
+            if args.hetero_layers == "" or args.hetero_layers == "null":
                 # 默认均分stage
                 pp = all_devices.num_devices // dcp_size // args.gpus_per_stage
                 hetero_stages = [pp for _ in range(dcp_size)]
@@ -234,7 +239,7 @@ def pretrain(args):
                     break
             # ---- hetero batch ----
             accumulate_micro_batch_num = [0,]
-            if args.micro_batch_num_list == "":
+            if args.micro_batch_num_list == "" or args.micro_batch_num_list == "null":
                 # 默认均分micro batch
                 num_micro_batches = global_batch_size // micro_batch_size // dp_size
                 for i in range(dp_size):
@@ -247,7 +252,7 @@ def pretrain(args):
                     accumulate_micro_batch_num.append(accumulate_micro_batch_num[-1] + micro_batch_num_list[i])
             gbs_per_dp = micro_batch_size * num_micro_batches
             # ---- hetero seqlen ----
-            if args.seq_len_list == "":
+            if args.seq_len_list == "" or args.seq_len_list == "null":
                 # 默认均分seq len
                 seq_lens = []
                 for cp in cp_list:
@@ -315,14 +320,20 @@ def pretrain(args):
             }
             # print(f"{local_device}: strategy_id = {strategy_id}, gbs = {global_batch_size}, mbs = {micro_batch_size}, seq_len = {seq_len} run begin")
             start_time = time.time()
+            if step == 2 and args.exp_file != "":
+                os.environ['HETU_STRAGGLER'] = "EXP_NEW"
+                os.environ['HETU_STRAGGLER_LOG_FILE'] = args.exp_file
             if args.torch_profile != 0 and step == 1:
                 with profile(activities=[ProfilerActivity.CUDA]) as prof:
-                    results = hetu_train(feed_dict, num_micro_batches, strategy_id)
+                    results = hetu_train(feed_dict, num_micro_batches, strategy_id, run_level=run_level)
                 prof.export_chrome_trace(f"trace/trace_{local_device}.json")
             else:
-                results = hetu_train(feed_dict, num_micro_batches, strategy_id)
+                results = hetu_train(feed_dict, num_micro_batches, strategy_id, run_level=run_level)
             end_time = time.time()
             consumed_samples += global_batch_size
+            if 'HETU_STRAGGLER_LOG_FILE' in os.environ:
+                del os.environ['HETU_STRAGGLER_LOG_FILE'] 
+                return consumed_samples
             # print(f"{local_device}: strategy_id = {strategy_id}, gbs = {global_batch_size}, mbs = {micro_batch_size}, seq_len = {seq_len} run end, consumed_samples = {consumed_samples}")
             # NOTE: 实际上应该扫描一次alloc到update之间的所有数据
             # grad_scale = 当前run的数据的batch_size除以总的这之间run加起来的batch_size
@@ -347,7 +358,7 @@ def pretrain(args):
             micro_batch_size = args.micro_batch_size, 
             global_seq_len = args.global_seq_len,
             strategy_id = strategy_id, 
-            run_level = ht.run_level("update")
+            run_level = ht.run_level("update") if args.compute_only == 0 else ht.run_level("compute_only")
         )
     
     test()
@@ -355,6 +366,12 @@ def pretrain(args):
 if __name__ == '__main__':
     print("Run hetu training")
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--compute_only", type=int, default=0, help="only do propagation"
+    )
+    parser.add_argument(
+        "--exp_file", type=str, default="", help="path to save exp info"
+    )
     parser.add_argument(
         "--torch_profile", type=int, default=0, help="use pytorch profiler"
     )

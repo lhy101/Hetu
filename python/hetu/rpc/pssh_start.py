@@ -63,6 +63,8 @@ def pssh(args):
         output = client.run_command(cmd)
         clients.append(client)
         outputs.append(output)
+        # workaround: in some cases must ensure ranks are in order
+        time.sleep(1)
     for client in clients:
         client.join() 
     for output in outputs:

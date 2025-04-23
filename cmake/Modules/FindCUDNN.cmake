@@ -45,27 +45,8 @@ find_library(CUDNN_LIBRARY_PATH ${CUDNN_LIBNAME}
     PATH_SUFFIXES lib lib64 cuda/lib cuda/lib64 lib/x64
     REQUIRED)
 
-set(file "${PROJECT_BINARY_DIR}/detect_cudnn_version.cc")
-file(WRITE ${file} "
-    #include <iostream>
-    #include \"${CUDNN_INCLUDE_PATH}/cudnn.h\"
-    #include \"${CUDNN_INCLUDE_PATH}/cudnn_version.h\"
-    int main()
-    {
-        std::cout << CUDNN_MAJOR << '.' << CUDNN_MINOR << '.' << CUDNN_PATCHLEVEL;
-        int x = cudnnGetVersion();
-        return x == CUDNN_VERSION;
-    }
-")
-try_run(CUDNN_VERSION_MATCHED compile_result ${PROJECT_BINARY_DIR} ${file}
-    RUN_OUTPUT_VARIABLE CUDNN_VERSION
-    CMAKE_FLAGS  "-DINCLUDE_DIRECTORIES=${CUDAToolkit_INCLUDE_DIR}"
-    LINK_LIBRARIES ${CUDNN_LIBRARY_PATH})
-if (NOT CUDNN_VERSION_MATCHED)
-    message(FATAL_ERROR "Found CUDNN header version and library version do not match! .h version is ${CUDNN_VERSION}\
-        (include: ${CUDNN_INCLUDE_PATH}, library: ${CUDNN_LIBRARY_PATH}). Please set CUDNN_ROOT manually.")
-endif()
-message(STATUS "CUDNN version: ${CUDNN_VERSION}")
+message(STATUS "CUDNN include: ${CUDNN_INCLUDE_PATH}")
+message(STATUS "CUDNN lib: ${CUDNN_LIBRARY_PATH}")
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(

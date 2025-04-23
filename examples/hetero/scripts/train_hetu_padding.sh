@@ -20,6 +20,7 @@ SERVER_PORT=${8:-"23456"}
 HOST_FILE_PATH=${9:-"${ENV_PATH}/host_single.yaml"}
 ENV_FILE_PATH=${10:-"${ENV_PATH}/env_A100.sh"}
 
+COMPUTE_ONLY=0
 TORCH_PROFILE=1
 CASE=0
 if [[ ${CASE} -eq 0 ]]; then
@@ -130,6 +131,7 @@ python -m hetu.models.llama.generate_llama_hetero_4d_config \
 	--file_name "hetero_config.json"
 
 CMD="python3 -u train_hetu_padding.py \
+--compute_only $COMPUTE_ONLY \
 --torch_profile $TORCH_PROFILE \
 --num_strategy=1 \
 --ds_parallel_config ds_parallel_config/llama_hetero/hetero_config.json \

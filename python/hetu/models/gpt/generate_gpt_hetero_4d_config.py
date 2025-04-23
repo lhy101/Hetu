@@ -20,15 +20,15 @@ def generate_gpt_hetero_4d_config(
     recompute_num_layers=None,
     recompute_layer_idxs_list=None
 ):
-    
-    if dp == 1:
-        zero = False
-    
+
     assert len(cp_list) == dp, "len of cp list should be equal to dp"
     dp_cp = sum(cp_list)
     # dp_union = [dp for _ in range(dp_cp)]
     # cp_union = [cp_list[i] for _ in range(cp_list[i]) for i in range(dp)]
     dp_cp_union = [dp_cp for _ in range(dp_cp)]
+    
+    if dp_cp == 1:
+        zero = False
     
     tp_union_list = []
     dg_union_list = []

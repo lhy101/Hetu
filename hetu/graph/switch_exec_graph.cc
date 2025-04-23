@@ -70,6 +70,28 @@ static std::unordered_set<Key> KeysUnion(const std::unordered_set<Key>& set1, co
   return result;
 }
 
+static const std::vector<Device> GetFailureDevices() {
+  const char* env = std::getenv("HETU_FAILURE_DEVICES");
+  if (!env) 
+    return {};
+
+  // 解析环境变量为整数集合
+  std::vector<Device> failure_devices;
+  std::stringstream ss(env);
+  std::string token;
+    
+  while (std::getline(ss, token, ',')) {
+    // 清理空格和非常规字符
+    token.erase(std::remove_if(token.begin(), token.end(),
+      [](char c){ return std::isspace(c) || c == ','; }), token.end());
+    if (!token.empty()) {
+      failure_devices.emplace_back(hetu::impl::comm::WorldRankToDevice(std::stoi(token)));
+    }
+  }
+
+  return failure_devices;
+}
+
 static const P2PRoute& GetP2PRoute(const Device& from, const Device& to) {
   auto p2p_pair = std::make_pair(from, to);
   auto it = all_routes.find(p2p_pair);
@@ -351,9 +373,18 @@ void ParamSlice::AddNeededSliceInst(const Device& device, const Tensor& tensor) 
   _switcher->RecordTensorInfo(tensor, name() + "(numel=" + std::to_string(tensor->numel()) + ")");
 }
 
-// TODO: 修改greedy算法
 void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
-                                Device2DTListPairMap& recv_mapping) {
+                                Device2DTListPairMap& recv_mapping,
+                                const std::vector<Device>& failure_devices) {
+  // 2025.4.6 Update
+  // 当存在挂节点时，不能让一些device参与通信
+  // 目前这里用模拟的方式来实现
+  for (int i = _owned_devices.size() - 1; i >= 0; --i) {
+    if (std::find(failure_devices.begin(), failure_devices.end(), _owned_devices.at(i)) != failure_devices.end()) {
+      _owned_devices.erase(_owned_devices.begin() + i);
+      _owned_slice_instances.erase(_owned_slice_instances.begin() + i);
+    }
+  }
   auto needed_len = _needed_slice_instances.size();
   auto owned_len = _owned_slice_instances.size();
   HT_ASSERT(needed_len == _needed_devices.size() && owned_len == _owned_devices.size())
@@ -401,6 +432,19 @@ void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
       auto& recv_tensor = _needed_slice_instances[i];
       auto& recv_device = _needed_devices[i];
       // 不同的算法
+      if (_switcher->_algorithm_level == SWITCH_ALGORITHM_LEVEL::MIN_IDX) {
+        size_t min_index = 0;
+        int min_value = hetu::impl::comm::DeviceToWorldRank(_owned_devices[0]);
+        for (size_t i = 1; i < _owned_devices.size(); ++i) {
+          int current_value = hetu::impl::comm::DeviceToWorldRank(_owned_devices[i]);
+          if (current_value < min_value) {
+            min_value = current_value;
+            min_index = i;
+          }
+        }
+        send_tensor = _owned_slice_instances[min_index];
+        send_device = _owned_devices[min_index];
+      }
       // FCFS or round-robin
       if (_switcher->_algorithm_level == SWITCH_ALGORITHM_LEVEL::FCFS
           || _switcher->_algorithm_level == SWITCH_ALGORITHM_LEVEL::ROUND_ROBIN
@@ -472,6 +516,7 @@ void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
         auto& intra_device_val_mapping = _switcher->_intra_device_val_mapping;
         auto& inter_device_val_mapping = _switcher->_inter_device_val_mapping;
         size_t min_val = std::numeric_limits<size_t>::max();
+        // HT_LOG_INFO << name() << " owned by " << _owned_devices << " and needed by " << needed_device << ", use NEW_GREEDY alg";
         for (size_t j = 0; j < owned_len; ++j) {
           const auto& p2p_route = GetP2PRoute(_owned_devices[j], recv_device);
           // 能不跨机，就不跨机
@@ -516,6 +561,7 @@ void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
         }
         send_tensor = _owned_slice_instances[best_send_num];
         send_device = _owned_devices[best_send_num];
+        // HT_LOG_INFO << "choose " << send_device << " to send";
       }
       // 建立通信关系
       auto recv_it = recv_mapping.find(recv_device);
@@ -536,10 +582,11 @@ void ParamSlice::ParamSliceComm(Device2DTListPairMap& send_mapping,
 // 遍历ParamBlock中的每个ParamSlice
 // 找到最优的ParamSliceInst的通信策略
 void ParamBlock::ParamBlockComm(Device2DTListPairMap& send_mapping,
-                                Device2DTListPairMap& recv_mapping) {
+                                Device2DTListPairMap& recv_mapping,
+                                const std::vector<Device>& failure_devices) {
   // auto param_slices_size = _param_slices.size();
   for (auto& param_slice_ptr : _param_slices) {
-    param_slice_ptr->ParamSliceComm(send_mapping, recv_mapping);
+    param_slice_ptr->ParamSliceComm(send_mapping, recv_mapping, failure_devices);
   }
 }
 
@@ -1138,8 +1185,10 @@ void SwitchExecGraph::MakeCommGraph(SWITCH_MODE switch_mode, SWITCH_LEVEL switch
   // 从全局的ParamBlocks视角出发
   // 选择最优的通信方案
   // 目前最优的是对于每一个ParamBlock的每一个ParamSlice，采用round-robin的算法
+  auto failure_devices = GetFailureDevices();
+  HT_LOG_INFO << "Failure devices are " << failure_devices;
   for (auto& param_block_ptr : _param_blocks) {
-    param_block_ptr->ParamBlockComm(_send_mapping, _recv_mapping);
+    param_block_ptr->ParamBlockComm(_send_mapping, _recv_mapping, failure_devices);
   }
 
   // _send_mapping和_recv_mapping此时已经获取到所有params的通信方案
@@ -2006,8 +2055,13 @@ void SwitchExecGraph::ProfileRunningDetails() {
   }
   for (const auto& kv : send_info_mapping) {
     send_info_output << "send " << kv.second.size()
+<<<<<<< HEAD
       << " tensor to " << kv.first;
     if (_profile_level == SWITCH_PROFILE_LEVEL::TIME) {
+=======
+      << " tensor to device " << hetu::impl::comm::DeviceToWorldRank(kv.first);
+    if (_profile_level <= SWITCH_PROFILE_LEVEL::TIME) {
+>>>>>>> tencent_H20
       for (const auto& send_info : kv.second) {
         send_info_output << ", " << send_info;
       }
@@ -2016,8 +2070,8 @@ void SwitchExecGraph::ProfileRunningDetails() {
   }
   for (const auto& kv : recv_info_mapping) {
     recv_info_output << "recv " << kv.second.size()
-      << " tensor from " << kv.first;
-    if (_profile_level == SWITCH_PROFILE_LEVEL::TIME) {
+      << " tensor from device " << hetu::impl::comm::DeviceToWorldRank(kv.first);
+    if (_profile_level < SWITCH_PROFILE_LEVEL::TIME) {
       for (const auto& recv_info : kv.second) {
         recv_info_output << ", " << recv_info;
       }
@@ -2181,7 +2235,7 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx, bool ignore_sha
   HT_ASSERT(_param_blocks.size() == 1)
     << "size wrong";
   for (auto& param_block_ptr : _param_blocks) {
-    param_block_ptr->ParamBlockComm(_send_mapping, _recv_mapping);
+    param_block_ptr->ParamBlockComm(_send_mapping, _recv_mapping, {});
   }
   // 通信组
   std::vector<Device> comm_devices(_comm_set.begin(), _comm_set.end());
@@ -2272,3 +2326,4 @@ Tensor ComplexExecComm::Instantiate(StreamIndex comm_stream_idx, bool ignore_sha
 
 } // namespace graph
 } // namespace hetu
+
